@@ -1,36 +1,96 @@
+import mongoose from "mongoose";
 import Question from "../models/Question.js";
 import Category from "../models/Category.js";
+import Notification from "../models/Notification.js";
+import User from "../models/User.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
+
+const buildQuestionFilter = (id) => {
+    if (!id) return { _id: null };
+    const strId = String(id).trim();
+    if (mongoose.Types.ObjectId.isValid(strId)) {
+        return { $or: [{ _id: strId }, { questionId: strId.toUpperCase() }] };
+    }
+    return { questionId: strId.toUpperCase() };
+};
 
 export const getCategories = async (req, res) => {
     try {
         const categories = await Category.find().sort({ name: 1 });
 
-        // Update counts dynamically if needed
-        const enrichedCategories = await Promise.all(
-            categories.map(async (cat) => {
-                const catObj = cat.toObject();
-                const totalQ = await Question.countDocuments({
-                    category: cat.name,
-                    isActive: true,
-                });
-                catObj.questionCount = totalQ;
+        // Aggregate all distinct topics, counts, and subtopics from Question collection
+        const questionAgg = await Question.aggregate([
+            { $match: { isActive: true } },
+            {
+                $group: {
+                    _id: { category: "$category", topic: "$topic" },
+                    count: { $sum: 1 },
+                    subtopics: { $addToSet: "$subtopic" },
+                },
+            },
+        ]);
 
-                if (catObj.topics && catObj.topics.length > 0) {
-                    catObj.topics = await Promise.all(
-                        catObj.topics.map(async (t) => {
-                            const tCount = await Question.countDocuments({
-                                category: cat.name,
-                                topic: t.name,
-                                isActive: true,
-                            });
-                            return { ...t, questionCount: tCount };
-                        })
-                    );
+        const catTopicMap = {};
+        for (const item of questionAgg) {
+            const catName = item._id.category || "General";
+            const topicName = item._id.topic || "General";
+            if (!catTopicMap[catName]) catTopicMap[catName] = [];
+            catTopicMap[catName].push({
+                name: topicName,
+                questionCount: item.count,
+                subtopics: (item.subtopics || []).filter(Boolean),
+            });
+        }
+
+        // Merge dynamic topics with Category documents
+        const enrichedCategories = categories.map((cat) => {
+            const catObj = cat.toObject();
+            const dynamicTopics = catTopicMap[catObj.name] || [];
+            const existingTopicMap = new Map();
+
+            (catObj.topics || []).forEach((t) => {
+                existingTopicMap.set(t.name.toLowerCase(), t);
+            });
+
+            const mergedTopics = [];
+
+            // Add or update existing topics with real counts
+            for (const t of catObj.topics || []) {
+                const found = dynamicTopics.find(
+                    (dt) => dt.name.toLowerCase() === t.name.toLowerCase()
+                );
+                const qCount = found ? found.questionCount : 0;
+                mergedTopics.push({
+                    ...t,
+                    questionCount: qCount,
+                    count: qCount,
+                    subtopics: (t.subtopics && t.subtopics.length > 0)
+                        ? t.subtopics
+                        : (found?.subtopics && found.subtopics.length > 0 ? found.subtopics : ["General Practice"]),
+                });
+            }
+
+            // Append newly discovered topics from the Question collection
+            for (const dt of dynamicTopics) {
+                if (!existingTopicMap.has(dt.name.toLowerCase())) {
+                    mergedTopics.push({
+                        _id: `top_${dt.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
+                        name: dt.name,
+                        questionCount: dt.questionCount,
+                        count: dt.questionCount,
+                        subtopics: dt.subtopics.length > 0 ? dt.subtopics : ["General Practice"],
+                    });
                 }
-                return catObj;
-            })
-        );
+            }
+
+            // Sort topics by question count descending
+            mergedTopics.sort((a, b) => (b.questionCount || 0) - (a.questionCount || 0));
+
+            const totalQ = mergedTopics.reduce((sum, t) => sum + (t.questionCount || 0), 0);
+            catObj.topics = mergedTopics;
+            catObj.questionCount = totalQ;
+            return catObj;
+        });
 
         return res.json({
             success: true,
@@ -135,7 +195,7 @@ export const getQuestionById = async (req, res) => {
         const { id } = req.params;
         const isPrivileged = req.user && ["coordinator", "admin"].includes(req.user.role);
 
-        let query = Question.findById(id);
+        let query = Question.findOne(buildQuestionFilter(id));
         if (!isPrivileged) {
             query = query.select("-correctOption -explanation");
         }
@@ -248,6 +308,24 @@ export const createQuestion = async (req, res) => {
             ipAddress: req.ip,
         });
 
+        // Dynamic student notifications for newly added questions
+        try {
+            const students = await User.find({ role: "student", isActive: true }).select("_id");
+            if (students.length > 0) {
+                const notifications = students.map((s) => ({
+                    user: s._id,
+                    title: "New Question Added",
+                    message: `A new ${question.difficulty || "practice"} question was added in ${question.topic}${question.companies?.length ? ` (${question.companies.join(", ")})` : ""}.`,
+                    type: "info",
+                    link: `/practice?topic=${encodeURIComponent(question.topic)}&category=${encodeURIComponent(question.category)}`,
+                    isRead: false,
+                }));
+                await Notification.insertMany(notifications);
+            }
+        } catch (notifErr) {
+            console.error("Failed to dispatch new-question notifications to students:", notifErr.message);
+        }
+
         return res.status(201).json({
             success: true,
             message: "Question created successfully",
@@ -281,7 +359,7 @@ export const updateQuestion = async (req, res) => {
             updateData.companies = updateData.companies.split(",").map((c) => c.trim()).filter(Boolean);
         }
 
-        const question = await Question.findByIdAndUpdate(id, updateData, {
+        const question = await Question.findOneAndUpdate(buildQuestionFilter(id), updateData, {
             new: true,
             runValidators: true,
         });
@@ -328,8 +406,8 @@ export const toggleQuestionStatus = async (req, res) => {
             });
         }
 
-        const question = await Question.findByIdAndUpdate(
-            id,
+        const question = await Question.findOneAndUpdate(
+            buildQuestionFilter(id),
             { isActive },
             { new: true }
         );

@@ -29,7 +29,7 @@ export const getAdminDashboard = async (req, res) => {
         const passRate =
             totalAttempts > 0
                 ? Math.round((passedAttempts / totalAttempts) * 100)
-                : 76;
+                : 0;
 
         return res.json({
             success: true,
@@ -44,6 +44,36 @@ export const getAdminDashboard = async (req, res) => {
                     totalAttempts,
                     platformPassRate: passRate,
                 },
+                metricCards: [
+                    {
+                        label: "Total Registered Users",
+                        value: totalUsers,
+                        subtext: `${activeCount} active platform accounts`,
+                        icon: "Users",
+                        color: "sky",
+                    },
+                    {
+                        label: "Active Students",
+                        value: studentsCount,
+                        subtext: "Eligible for campus placement tests",
+                        icon: "GraduationCap",
+                        color: "teal",
+                    },
+                    {
+                        label: "Test Attempts",
+                        value: totalAttempts,
+                        subtext: "Completed mock tests & drills",
+                        icon: "Activity",
+                        color: "amber",
+                    },
+                    {
+                        label: "Platform Pass Rate",
+                        value: `${passRate}%`,
+                        subtext: `${passedAttempts} passed / ${totalAttempts} attempts`,
+                        icon: "TrendingUp",
+                        color: "emerald",
+                    },
+                ],
                 roleDistribution: [
                     { role: "student", label: "Students", count: studentsCount },
                     { role: "coordinator", label: "T&P Coordinators", count: coordinatorsCount },
@@ -56,6 +86,7 @@ export const getAdminDashboard = async (req, res) => {
                     targetType: log.targetType,
                     details: log.details,
                     createdAt: log.createdAt,
+                    timestamp: log.createdAt,
                 })),
             },
         });
@@ -74,8 +105,11 @@ export const getUsers = async (req, res) => {
         const filter = {};
 
         if (role) filter.role = role.toLowerCase();
-        if (status === "active") filter.isActive = true;
-        if (status === "inactive") filter.isActive = false;
+        if (status === "active" || req.query.isActive === "true" || req.query.isActive === true) {
+            filter.isActive = true;
+        } else if (status === "inactive" || req.query.isActive === "false" || req.query.isActive === false) {
+            filter.isActive = false;
+        }
 
         if (search) {
             filter.$or = [
@@ -341,8 +375,21 @@ export const getAuditLogs = async (req, res) => {
         const { action, targetType, page = 1, limit = 50 } = req.query;
         const filter = {};
 
-        if (action) filter.action = action;
-        if (targetType) filter.targetType = targetType;
+        if (action) {
+            const aliasMap = {
+                USER_CREATED: /USER_CREATE/i,
+                ROLE_ASSIGNED: /ROLE_CHANGE/i,
+                USER_STATUS_CHANGE: /STATUS_CHANGE/i,
+                SPREADSHEET_IMPORT_CONFIRMED: /SPREADSHEET_IMPORT/i,
+            };
+            filter.action = aliasMap[action] || new RegExp(`^${action}$`, "i");
+        }
+        if (targetType) {
+            const aliasMap = {
+                QUESTION_BANK: /QUESTION/i,
+            };
+            filter.targetType = aliasMap[targetType] || new RegExp(`^${targetType}$`, "i");
+        }
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
@@ -356,10 +403,18 @@ export const getAuditLogs = async (req, res) => {
             AuditLog.countDocuments(filter),
         ]);
 
+        const formattedLogs = logs.map((l) => {
+            const obj = l.toObject ? l.toObject() : l;
+            return {
+                ...obj,
+                timestamp: obj.createdAt,
+            };
+        });
+
         return res.json({
             success: true,
             message: "Audit logs retrieved successfully",
-            data: logs,
+            data: formattedLogs,
             pagination: {
                 total,
                 page: pageNum,

@@ -1,14 +1,274 @@
 import MockTest from "../models/MockTest.js";
 import Question from "../models/Question.js";
 import Attempt from "../models/Attempt.js";
+import Bookmark from "../models/Bookmark.js";
+import User from "../models/User.js";
 import { logAuditEvent } from "../utils/auditLogger.js";
+
+const escapeRegex = (string) => {
+    return string ? string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "";
+};
+
+// Helper: Ensure a company has a verified full-length placement simulation mock test
+export const ensureCompanyMockTest = async (companyName) => {
+    if (!companyName || typeof companyName !== "string" || !companyName.trim()) return null;
+    const trimmed = companyName.trim();
+    const slug = `${trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}-national-mock-test`;
+
+    const escapedName = escapeRegex(trimmed);
+    let existing = await MockTest.findOne({
+        $or: [
+            { slug },
+            { company: new RegExp(`^${escapedName}$`, "i"), type: { $in: ["company", "company_mock"] } }
+        ]
+    });
+
+    // Eligible active questions strictly tagged for this company
+    const eligibleQuestions = await Question.find({
+        companies: new RegExp(`^${escapedName}$`, "i"),
+        isActive: true,
+    }).select("_id category topic difficulty");
+
+    if (eligibleQuestions.length === 0) {
+        return null;
+    }
+
+    // Target full-length count: balanced across categories up to 30 (or actual available count)
+    const targetCount = Math.min(30, eligibleQuestions.length);
+
+    if (existing) {
+        // If existing test has 0 questions or outdated question count, sync with real eligible questions
+        if (!existing.questions || existing.questions.length === 0) {
+            existing.questions = eligibleQuestions.slice(0, targetCount).map((q) => q._id);
+            existing.totalQuestions = existing.questions.length;
+            existing.totalMarks = existing.questions.length;
+            existing.passingScore = 60;
+            existing.type = "company_mock";
+            await existing.save();
+        }
+        return existing;
+    }
+
+    // Select questions balanced across categories for a representative campus exam blueprint
+    const categoriesMap = {};
+    for (const q of eligibleQuestions) {
+        const cat = q.category || "General";
+        if (!categoriesMap[cat]) categoriesMap[cat] = [];
+        categoriesMap[cat].push(q);
+    }
+
+    const selectedQuestionIds = [];
+    const usedIds = new Set();
+    const catKeys = Object.keys(categoriesMap);
+    let added = true;
+
+    while (selectedQuestionIds.length < targetCount && added) {
+        added = false;
+        for (const cat of catKeys) {
+            const list = categoriesMap[cat];
+            if (list && list.length > 0 && selectedQuestionIds.length < targetCount) {
+                const nextQ = list.shift();
+                if (!usedIds.has(String(nextQ._id))) {
+                    usedIds.add(String(nextQ._id));
+                    selectedQuestionIds.push(nextQ._id);
+                    added = true;
+                }
+            }
+        }
+    }
+
+    // If still need more to reach targetCount, fill with remaining eligible questions
+    if (selectedQuestionIds.length < targetCount) {
+        for (const q of eligibleQuestions) {
+            if (!usedIds.has(String(q._id)) && selectedQuestionIds.length < targetCount) {
+                usedIds.add(String(q._id));
+                selectedQuestionIds.push(q._id);
+            }
+        }
+    }
+
+    const newTest = await MockTest.create({
+        title: `${trimmed} National Qualifier Placement Simulation`,
+        slug,
+        type: "company_mock",
+        company: trimmed,
+        durationMinutes: 60,
+        totalQuestions: selectedQuestionIds.length,
+        totalMarks: selectedQuestionIds.length,
+        passingScore: 60,
+        category: "Mixed Aptitude",
+        difficulty: "medium",
+        questions: selectedQuestionIds,
+        description: `Comprehensive 60-minute placement simulation covering verified hiring pattern and question types for ${trimmed}.`,
+        instructions: [
+            `This assessment consists of ${selectedQuestionIds.length} verified questions strictly tagged for ${trimmed}.`,
+            "Each question carries 1 mark. There is no negative marking.",
+            "Authoritative server countdown timer begins immediately upon test launch.",
+            "Submit all answers before countdown expires to view detailed analytics and performance score."
+        ],
+        isActive: true,
+    });
+
+    return newTest;
+};
+
+// Helper: Ensure company mock tests exist for all companies that have active questions in MongoDB
+export const ensureAllCompanyMockTests = async () => {
+    try {
+        const distinctCompanies = await Question.distinct("companies", { isActive: true });
+        if (Array.isArray(distinctCompanies)) {
+            for (const c of distinctCompanies) {
+                if (c && typeof c === "string" && c.trim()) {
+                    await ensureCompanyMockTest(c.trim());
+                }
+            }
+        }
+    } catch (err) {
+        console.error("ensureAllCompanyMockTests error:", err.message);
+    }
+};
+
+// Helper: Ensure Diagnostic and Topic tests exist in MockTest collection
+export const ensureDiagnosticAndTopicTests = async () => {
+    try {
+        // 1. Diagnostic Assessment
+        const existingDiag = await MockTest.findOne({ type: "diagnostic", isActive: true });
+        if (!existingDiag) {
+            const diagQuestions = await Question.find({ isActive: true })
+                .select("_id")
+                .limit(25);
+            if (diagQuestions.length > 0) {
+                await MockTest.create({
+                    title: "ReadyUp All-India Placement Diagnostic Assessment",
+                    slug: "readyup-all-india-diagnostic-assessment",
+                    type: "diagnostic",
+                    company: "General",
+                    durationMinutes: 45,
+                    totalQuestions: diagQuestions.length,
+                    totalMarks: diagQuestions.length,
+                    passingScore: 60,
+                    category: "Mixed Aptitude",
+                    difficulty: "medium",
+                    questions: diagQuestions.map((q) => q._id),
+                    description: "Authoritative diagnostic benchmark assessing readiness across Quantitative, Logical, and Verbal aptitude domains.",
+                    instructions: [
+                        `Diagnostic evaluation featuring ${diagQuestions.length} standardized questions.`,
+                        "Calculators are not permitted.",
+                        "Identifies strength and weakness domains to customize practice drills."
+                    ],
+                    isActive: true,
+                });
+            }
+        }
+
+        // 2. Ensure existing Quantitative Speed Drill has real questions linked
+        const quantTest = await MockTest.findOne({ slug: "quantitative-aptitude-speed-drill" });
+        if (quantTest && (!quantTest.questions || quantTest.questions.length === 0)) {
+            const quantQs = await Question.find({ category: "Quantitative Aptitude", isActive: true })
+                .select("_id")
+                .limit(15);
+            if (quantQs.length > 0) {
+                quantTest.questions = quantQs.map((q) => q._id);
+                quantTest.totalQuestions = quantQs.length;
+                quantTest.totalMarks = quantQs.length;
+                quantTest.type = "topic_test";
+                await quantTest.save();
+            }
+        }
+
+        // 3. Ensure Logical Reasoning Topic Sprint
+        const existingLogical = await MockTest.findOne({ slug: "logical-reasoning-analytical-sprint" });
+        if (!existingLogical) {
+            const lrQs = await Question.find({ category: "Logical Reasoning", isActive: true })
+                .select("_id")
+                .limit(15);
+            if (lrQs.length > 0) {
+                await MockTest.create({
+                    title: "Logical Reasoning & Analytical Ability Sprint",
+                    slug: "logical-reasoning-analytical-sprint",
+                    type: "topic_test",
+                    company: "General",
+                    durationMinutes: 25,
+                    totalQuestions: lrQs.length,
+                    totalMarks: lrQs.length,
+                    passingScore: 60,
+                    category: "Logical Reasoning",
+                    difficulty: "medium",
+                    questions: lrQs.map((q) => q._id),
+                    description: "Speed sprint covering Number Series, Coding-Decoding, and Syllogisms.",
+                    instructions: [
+                        "15 analytical questions testing pattern recognition and logical deduction.",
+                        "Timer enforces rapid problem-solving speed."
+                    ],
+                    isActive: true,
+                });
+            }
+        }
+
+        // 4. Ensure Verbal Ability Topic Sprint
+        const existingVerbal = await MockTest.findOne({ slug: "verbal-ability-grammar-sprint" });
+        if (!existingVerbal) {
+            const vaQs = await Question.find({ category: "Verbal Ability", isActive: true })
+                .select("_id")
+                .limit(15);
+            if (vaQs.length > 0) {
+                await MockTest.create({
+                    title: "Verbal Ability & Grammar Accuracy Sprint",
+                    slug: "verbal-ability-grammar-sprint",
+                    type: "topic_test",
+                    company: "General",
+                    durationMinutes: 20,
+                    totalQuestions: vaQs.length,
+                    totalMarks: vaQs.length,
+                    passingScore: 60,
+                    category: "Verbal Ability",
+                    difficulty: "medium",
+                    questions: vaQs.map((q) => q._id),
+                    description: "Placement verbal assessment testing grammar, vocabulary, and sentence ordering.",
+                    instructions: [
+                        "15 verbal ability questions commonly tested in campus hiring exams.",
+                        "20 minutes allocated."
+                    ],
+                    isActive: true,
+                });
+            }
+        }
+    } catch (err) {
+        console.error("ensureDiagnosticAndTopicTests error:", err.message);
+    }
+};
 
 export const getMockTests = async (req, res) => {
     try {
-        const { type, category, difficulty } = req.query;
+        const { type, category, difficulty, company } = req.query;
+
+        // Idempotently ensure company mocks and category assessments are available
+        await ensureAllCompanyMockTests();
+        await ensureDiagnosticAndTopicTests();
+
         const filter = { isActive: true };
 
-        if (type) filter.type = type;
+        // Handle tabs and assessment types safely, including legacy values
+        if (type && type !== "all") {
+            if (type === "company_mock" || type === "company") {
+                filter.type = { $in: ["company", "company_mock"] };
+            } else if (type === "topic_test" || type === "topic") {
+                filter.type = { $in: ["topic", "topic_test", "grand"] };
+                if (!company) {
+                    filter.company = { $in: ["", null, "General"] };
+                }
+            } else if (type === "diagnostic") {
+                filter.type = "diagnostic";
+            } else {
+                filter.type = type;
+            }
+        }
+
+        // Strict company filtering when requested
+        if (company && typeof company === "string" && company.trim()) {
+            filter.company = new RegExp(`^${escapeRegex(company.trim())}$`, "i");
+        }
+
         if (category) filter.category = new RegExp(category, "i");
         if (difficulty) filter.difficulty = difficulty.toLowerCase();
 
@@ -16,10 +276,20 @@ export const getMockTests = async (req, res) => {
             .select("-questions")
             .sort({ createdAt: -1 });
 
+        const formatted = tests.map((t) => {
+            const obj = t.toObject();
+            // Normalize type representation for the frontend tabs
+            if (obj.type === "company") obj.type = "company_mock";
+            if (obj.type === "topic" || obj.type === "grand") obj.type = "topic_test";
+            obj.totalMarks = obj.totalQuestions || 15;
+            obj.passingMarks = Math.round((obj.totalMarks * (obj.passingScore || 60)) / 100);
+            return obj;
+        });
+
         return res.json({
             success: true,
             message: "Mock tests retrieved successfully",
-            data: tests,
+            data: formatted,
         });
     } catch (error) {
         console.error("getMockTests error:", error.message);
@@ -68,13 +338,15 @@ export const startPractice = async (req, res) => {
         } = req.body;
 
         const filter = { isActive: true };
-        if (category) filter.category = new RegExp(`^${category}$`, "i");
-        if (topic) filter.topic = new RegExp(`^${topic}$`, "i");
-        if (subtopic) filter.subtopic = new RegExp(`^${subtopic}$`, "i");
-        if (difficulty) filter.difficulty = difficulty.toLowerCase();
-        if (company) filter.companies = new RegExp(company, "i");
+        if (category && category !== "All") filter.category = new RegExp(`^${escapeRegex(category.trim())}$`, "i");
+        if (topic && topic !== "All Topics (Mixed)") filter.topic = new RegExp(`^${escapeRegex(topic.trim())}$`, "i");
+        if (subtopic) filter.subtopic = new RegExp(`^${escapeRegex(subtopic.trim())}$`, "i");
+        if (difficulty && difficulty !== "all") filter.difficulty = difficulty.toLowerCase().trim();
+        if (company && typeof company === "string" && company.trim()) {
+            filter.companies = new RegExp(`^${escapeRegex(company.trim())}$`, "i");
+        }
 
-        const limitCount = Math.min(50, Math.max(3, parseInt(count, 10) || 10));
+        const limitCount = Math.max(1, Math.min(50, parseInt(count, 10) || 10));
 
         // Random or latest sample of matching questions
         const questions = await Question.aggregate([
@@ -83,15 +355,13 @@ export const startPractice = async (req, res) => {
         ]);
 
         if (!questions || questions.length === 0) {
-            // Fallback to any active questions if none match strict filter
-            const fallback = await Question.find({ isActive: true }).limit(limitCount);
-            if (!fallback || fallback.length === 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: "No questions currently available for this selection.",
-                });
-            }
-            questions.push(...fallback);
+            const filterDesc = [company, category, topic, difficulty].filter(Boolean).join(" / ");
+            return res.status(404).json({
+                success: false,
+                message: filterDesc
+                    ? `No questions currently match your selected filters (${filterDesc}).`
+                    : "No questions currently available for this selection.",
+            });
         }
 
         const title = topic
@@ -344,26 +614,62 @@ export const submitAttempt = async (req, res) => {
             });
         }
 
-        // Format answers dictionary: accepts either { [questionId]: "A" } or array of [{ questionId, answer }]
+        // Format answers dictionary: accepts array of [{ questionId, selectedOption/answer/userAnswer }] or object { [questionId]: "A" | { selectedOption: "A" } }
         const answerMap = {};
         if (Array.isArray(answers)) {
             answers.forEach((item) => {
-                if (item?.questionId) answerMap[item.questionId] = item.answer || item.userAnswer;
+                if (!item || typeof item !== "object") return;
+                const rawChoice = item.selectedOption ?? item.answer ?? item.userAnswer ?? item.selectedAnswer ?? item.choice ?? null;
+                const normChoice = typeof rawChoice === "string" ? rawChoice.trim().toUpperCase() : rawChoice;
+                if (item.questionId) {
+                    const strId = String(item.questionId).trim();
+                    answerMap[strId] = normChoice;
+                    answerMap[strId.toUpperCase()] = normChoice;
+                }
+                if (item.questionRef) answerMap[item.questionRef.toString()] = normChoice;
+                if (item._id) answerMap[item._id.toString()] = normChoice;
             });
         } else if (typeof answers === "object" && answers !== null) {
-            Object.assign(answerMap, answers);
+            Object.entries(answers).forEach(([key, val]) => {
+                let normChoice = null;
+                if (typeof val === "string") {
+                    normChoice = val.trim().toUpperCase();
+                } else if (val && typeof val === "object") {
+                    const subChoice = val.selectedOption ?? val.answer ?? val.userAnswer ?? val.selectedAnswer ?? val.choice ?? null;
+                    if (typeof subChoice === "string") normChoice = subChoice.trim().toUpperCase();
+                    else normChoice = subChoice;
+                }
+                const strKey = String(key).trim();
+                answerMap[strKey] = normChoice;
+                answerMap[strKey.toUpperCase()] = normChoice;
+            });
         }
 
         let correctCount = 0;
         let answeredCount = 0;
 
         attempt.questions.forEach((q) => {
-            const userChoice = answerMap[q.questionId] || answerMap[q.questionRef?.toString()] || null;
+            const rawChoice =
+                (q.questionId && answerMap[q.questionId]) ||
+                (q.questionId && answerMap[q.questionId.trim().toUpperCase()]) ||
+                (q.questionRef && answerMap[q.questionRef.toString()]) ||
+                (q._id && answerMap[q._id.toString()]) ||
+                null;
+
+            let userChoice = null;
+            if (typeof rawChoice === "string") {
+                userChoice = rawChoice.trim().toUpperCase();
+            } else if (rawChoice && typeof rawChoice === "object") {
+                const sub = rawChoice.selectedOption ?? rawChoice.answer ?? rawChoice.userAnswer ?? null;
+                if (typeof sub === "string") userChoice = sub.trim().toUpperCase();
+            }
+
             q.userAnswer = userChoice;
 
+            const expected = (q.correctOption || "").trim().toUpperCase();
             if (userChoice) {
                 answeredCount += 1;
-                if (userChoice.toUpperCase() === q.correctOption.toUpperCase()) {
+                if (userChoice === expected) {
                     q.isCorrect = true;
                     correctCount += 1;
                 } else {
@@ -414,11 +720,94 @@ export const submitAttempt = async (req, res) => {
             });
         }
 
+        // If student answers questions incorrectly in this new attempt, ensure any prior dismissal is cleared so they reappear for revision
+        const newlyMissedIds = attempt.questions
+            .filter((q) => q.userAnswer && !q.isCorrect)
+            .map((q) => q.questionId)
+            .filter(Boolean);
+
+        if (newlyMissedIds.length > 0) {
+            try {
+                const user = await User.findById(req.user._id).select("dismissedIncorrectQuestions");
+                if (user?.dismissedIncorrectQuestions?.length > 0) {
+                    const missedLowerSet = new Set(newlyMissedIds.map((id) => id.trim().toLowerCase()));
+                    const remaining = user.dismissedIncorrectQuestions.filter((entry) => {
+                        const rawId = entry.split("|")[0].trim().toLowerCase();
+                        return !missedLowerSet.has(rawId);
+                    });
+                    if (remaining.length !== user.dismissedIncorrectQuestions.length) {
+                        user.dismissedIncorrectQuestions = remaining;
+                        await user.save();
+                    }
+                }
+            } catch (clearDismissErr) {
+                console.error("Error clearing prior dismissal for newly missed questions:", clearDismissErr.message);
+            }
+        }
+
         // Increment mock test stats if mock test
         if (submittedAttempt.mockTest) {
             await MockTest.findByIdAndUpdate(submittedAttempt.mockTest, {
                 $inc: { attemptsCount: 1 },
             }).catch(() => null);
+        }
+
+        // Auto-save questions marked for review to student bookmarks
+        if (Array.isArray(answers)) {
+            for (const item of answers) {
+                if (item && item.markedForReview && item.questionId) {
+                    try {
+                        const trimmedQId = String(item.questionId).trim();
+                        const qSnap = attempt.questions.find(
+                            (x) => x.questionId && x.questionId.toLowerCase() === trimmedQId.toLowerCase()
+                        );
+                        let questionRef = qSnap?.questionRef;
+                        if (!questionRef) {
+                            const foundQ = await Question.findOne({
+                                $or: [
+                                    { questionId: trimmedQId },
+                                    { questionId: trimmedQId.toUpperCase() },
+                                    { questionId: new RegExp(`^${trimmedQId}$`, "i") },
+                                    ...(trimmedQId.match(/^[0-9a-fA-F]{24}$/) ? [{ _id: trimmedQId }] : []),
+                                ],
+                            });
+                            if (foundQ) {
+                                questionRef = foundQ._id;
+                            } else if (qSnap) {
+                                const newQ = await Question.create({
+                                    questionId: qSnap.questionId.toUpperCase(),
+                                    questionText: qSnap.questionText,
+                                    options: qSnap.options,
+                                    correctOption: qSnap.correctOption,
+                                    explanation: qSnap.explanation || "",
+                                    category: qSnap.category || "General",
+                                    topic: qSnap.topic || "General",
+                                    difficulty: qSnap.difficulty || "medium",
+                                    isVerified: true,
+                                    isActive: true,
+                                });
+                                questionRef = newQ._id;
+                            }
+                        }
+                        if (questionRef) {
+                            await Bookmark.findOneAndUpdate(
+                                { student: req.user._id, question: questionRef },
+                                {
+                                    $setOnInsert: {
+                                        student: req.user._id,
+                                        question: questionRef,
+                                        questionId: qSnap?.questionId || trimmedQId,
+                                        notes: "Marked for Review",
+                                    },
+                                },
+                                { upsert: true }
+                            );
+                        }
+                    } catch (bookmarkErr) {
+                        console.error("Auto-bookmark marked question error:", bookmarkErr.message);
+                    }
+                }
+            }
         }
 
         return res.json({
@@ -542,40 +931,128 @@ export const getHistory = async (req, res) => {
 
 export const getIncorrectQuestions = async (req, res) => {
     try {
-        const { limit = 20 } = req.query;
-        const maxLimit = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
+        const parsedLimit = parseInt(req.query.limit, 10);
+        const maxLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? Math.min(200, parsedLimit) : 100;
 
-        // Aggregate across student's attempts to find questions where userAnswer is not correctOption
+        // Fetch student's dismissed questions from user profile
+        const user = await User.findById(req.user._id).select("dismissedIncorrectQuestions updatedAt");
+        const dismissedEntries = user?.dismissedIncorrectQuestions || [];
+
+        // Build dismissal timestamp map (questionId/questionRef lowercase -> dismissedAt timestamp)
+        const dismissedMap = new Map();
+        for (const entry of dismissedEntries) {
+            if (!entry) continue;
+            const str = String(entry).trim();
+            if (str.includes("|")) {
+                const [idPart, timePart] = str.split("|");
+                const parsedTime = new Date(timePart).getTime();
+                dismissedMap.set(idPart.toLowerCase(), !isNaN(parsedTime) ? parsedTime : 0);
+            } else {
+                const legacyTime = user.updatedAt ? new Date(user.updatedAt).getTime() : 0;
+                dismissedMap.set(str.toLowerCase(), legacyTime);
+            }
+        }
+
+        // Aggregate across student's submitted attempts
         const attempts = await Attempt.find({
             student: req.user._id,
             isSubmitted: true,
         }).sort({ createdAt: -1 });
 
-        const seenQuestionIds = new Set();
+        const seenKeys = new Set();
         const incorrectList = [];
 
         for (const att of attempts) {
-            for (const q of att.questions) {
-                if (q.userAnswer && !q.isCorrect && !seenQuestionIds.has(q.questionId)) {
-                    seenQuestionIds.add(q.questionId);
-                    incorrectList.push({
-                        _id: q.questionRef || q.questionId,
-                        questionId: q.questionId,
-                        questionText: q.questionText,
-                        options: q.options,
-                        correctOption: q.correctOption,
-                        explanation: q.explanation,
-                        category: q.category,
-                        topic: q.topic,
-                        difficulty: q.difficulty,
-                        attemptedAnswer: q.userAnswer,
-                        lastAttemptedDate: att.createdAt,
-                    });
+            const attemptTime = new Date(att.createdAt).getTime();
 
-                    if (incorrectList.length >= maxLimit) break;
+            for (const q of att.questions) {
+                const qId = q.questionId ? String(q.questionId).trim() : "";
+                const qIdLower = qId.toLowerCase();
+                const qRefStr = q.questionRef ? q.questionRef.toString() : "";
+                const qRefLower = qRefStr.toLowerCase();
+
+                // Unique key for deduplication across attempts (1 revision card per question)
+                const dedupeKey = qId ? qId.toUpperCase() : qRefStr;
+                if (!dedupeKey) continue;
+
+                // Only consider answered questions that are incorrect
+                const isAnswered = Boolean(q.userAnswer && String(q.userAnswer).trim());
+                if (!isAnswered || q.isCorrect) continue;
+
+                if (seenKeys.has(dedupeKey)) continue;
+
+                // Check dismissal: if dismissed and attempt occurred BEFORE or AT dismissal, keep dismissed
+                // If attempt occurred AFTER dismissal, student made a new mistake and it must reappear
+                const dismTimeQId = dismissedMap.has(qIdLower) ? dismissedMap.get(qIdLower) : null;
+                const dismTimeQRef = qRefLower && dismissedMap.has(qRefLower) ? dismissedMap.get(qRefLower) : null;
+
+                if (dismTimeQId !== null && attemptTime <= dismTimeQId) {
+                    continue;
                 }
+                if (dismTimeQRef !== null && attemptTime <= dismTimeQRef) {
+                    continue;
+                }
+
+                seenKeys.add(dedupeKey);
+
+                incorrectList.push({
+                    _id: q.questionRef || q.questionId,
+                    questionId: q.questionId,
+                    questionText: q.questionText,
+                    options: q.options || [],
+                    correctOption: q.correctOption,
+                    explanation: q.explanation || "",
+                    category: q.category || "General",
+                    topic: q.topic || "General",
+                    difficulty: q.difficulty || "medium",
+                    attemptedAnswer: q.userAnswer,
+                    lastAttemptedDate: att.createdAt,
+                });
+
+                if (incorrectList.length >= maxLimit) break;
             }
             if (incorrectList.length >= maxLimit) break;
+        }
+
+        // Missing metadata backfill: if options or explanation are missing from the attempt snapshot,
+        // populate them from the Question model in MongoDB
+        const missingMetaItems = incorrectList.filter(
+            (item) => !item.options || item.options.length === 0 || !item.explanation || !item.questionText
+        );
+        if (missingMetaItems.length > 0) {
+            try {
+                const qIdsToFetch = missingMetaItems.map((m) => m.questionId).filter(Boolean);
+                const qRefsToFetch = missingMetaItems
+                    .map((m) => m._id)
+                    .filter((id) => id && String(id).match(/^[0-9a-fA-F]{24}$/));
+
+                const dbQuestions = await Question.find({
+                    $or: [
+                        { questionId: { $in: qIdsToFetch } },
+                        { _id: { $in: qRefsToFetch } },
+                    ],
+                });
+
+                const dbQMap = new Map();
+                dbQuestions.forEach((dbQ) => {
+                    if (dbQ.questionId) dbQMap.set(dbQ.questionId.toUpperCase(), dbQ);
+                    dbQMap.set(dbQ._id.toString(), dbQ);
+                });
+
+                missingMetaItems.forEach((item) => {
+                    const match = dbQMap.get(item.questionId?.toUpperCase()) || dbQMap.get(item._id?.toString());
+                    if (match) {
+                        if (!item.questionText || item.questionText === "Practice Question") item.questionText = match.questionText;
+                        if (!item.options || item.options.length === 0) item.options = match.options;
+                        if (!item.explanation) item.explanation = match.explanation;
+                        if (!item.category) item.category = match.category;
+                        if (!item.topic) item.topic = match.topic;
+                        if (!item.difficulty) item.difficulty = match.difficulty;
+                    }
+                });
+            } catch (fillErr) {
+                console.error("Backfill missing question metadata error:", fillErr.message);
+            }
         }
 
         return res.json({
@@ -588,6 +1065,41 @@ export const getIncorrectQuestions = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Failed to retrieve incorrect questions",
+        });
+    }
+};
+
+export const removeIncorrectQuestion = async (req, res) => {
+    try {
+        const { questionId } = req.params;
+        if (!questionId) {
+            return res.status(400).json({
+                success: false,
+                message: "questionId parameter is required",
+            });
+        }
+
+        const trimmedId = String(questionId).trim();
+        const nowIso = new Date().toISOString();
+        const timestampedEntry = `${trimmedId}|${nowIso}`;
+
+        // Safely persist to student's dismissed list
+        await User.findByIdAndUpdate(req.user._id, {
+            $addToSet: {
+                dismissedIncorrectQuestions: timestampedEntry,
+            },
+        });
+
+        return res.json({
+            success: true,
+            message: "Question removed from revision centre",
+            data: { questionId: trimmedId },
+        });
+    } catch (error) {
+        console.error("removeIncorrectQuestion error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to remove question from revision centre",
         });
     }
 };

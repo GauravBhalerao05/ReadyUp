@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "seed": "node scripts/seed.js",
     "provision-admin": "node scripts/provisionAdmin.js",
-    "test": "node tests/api.test.js"
+    "test": "node tests/api.test.js && node tests/import.test.js && node tests/test_company_mock_and_filters.js"
   },
   "keywords": [],
   "author": "",

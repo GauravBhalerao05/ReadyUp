@@ -16,8 +16,8 @@ const mockTestSchema = new mongoose.Schema(
         },
         type: {
             type: String,
-            enum: ["company", "grand", "topic"],
-            default: "grand",
+            enum: ["company", "company_mock", "grand", "topic", "topic_test", "diagnostic"],
+            default: "company_mock",
             index: true,
         },
         description: {

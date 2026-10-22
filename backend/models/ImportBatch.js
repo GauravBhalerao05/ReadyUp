@@ -43,8 +43,13 @@ const importBatchSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ["previewed", "confirmed", "failed"],
+            enum: ["previewed", "confirmed", "completed", "failed"],
             default: "previewed",
+        },
+        expiresAt: {
+            type: Date,
+            default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours preview lifespan
+            index: true,
         },
         previewRows: {
             type: Array,

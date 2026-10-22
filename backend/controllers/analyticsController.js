@@ -42,13 +42,13 @@ export const getStudentDashboard = async (req, res) => {
         });
 
         const avgAccuracy =
-            testsCompleted > 0 ? Math.round(totalAccuracy / testsCompleted) : 74;
+            testsCompleted > 0 ? Math.round(totalAccuracy / testsCompleted) : 0;
         const passRate =
-            testsCompleted > 0 ? Math.round((passedCount / testsCompleted) * 100) : 75;
+            testsCompleted > 0 ? Math.round((passedCount / testsCompleted) * 100) : 0;
         const studyTimeHours =
             testsCompleted > 0
                 ? Number((totalTimeSec / 3600).toFixed(1))
-                : 14.5;
+                : 0;
 
         // Determine Next Best Action based on lowest accuracy topic
         const topicList = Object.values(topicAccuracyMap);
@@ -62,25 +62,36 @@ export const getStudentDashboard = async (req, res) => {
 
         const nextBestAction = lowestTopic
             ? {
+                  label: "NEXT BEST ACTION",
                   title: `${lowestTopic.topic} Mastery Drill`,
+                  description: `Your accuracy in ${lowestTopic.topic} is currently ${Math.round((lowestTopic.correct / lowestTopic.total) * 100)}%. Practice a curated 10-question set to build speed and accuracy.`,
                   topic: lowestTopic.topic,
+                  targetTopic: lowestTopic.topic,
                   category: lowestTopic.category,
+                  targetCategory: lowestTopic.category,
                   currentAccuracy: Math.round((lowestTopic.correct / lowestTopic.total) * 100),
                   targetAccuracy: 85,
+                  ctaText: "Start Practice →",
                   reason: "Identified as your lowest-scoring topic based on recent performance",
               }
             : {
-                  title: "Profit & Loss Mastery Drill",
-                  topic: "Profit and Loss",
+                  label: "NEXT BEST ACTION",
+                  title: "Time and Work Speed Drill",
+                  description: "Solve a curated 10-question practice set to build core aptitude speed and accuracy for placement rounds.",
+                  topic: "Time and Work",
+                  targetTopic: "Time and Work",
                   category: "Quantitative Aptitude",
-                  currentAccuracy: 52,
+                  targetCategory: "Quantitative Aptitude",
+                  currentAccuracy: 0,
                   targetAccuracy: 85,
-                  reason: "High frequency in campus placement screening rounds",
+                  ctaText: "Start Practice →",
+                  reason: "Recommended starting topic to benchmark your aptitude skills",
               };
 
         // Weekly goal calculation (Monday to Sunday)
         const now = new Date();
-        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay() + 1));
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1));
         startOfWeek.setHours(0, 0, 0, 0);
 
         const thisWeekCompleted = completedAttempts.filter(
@@ -95,23 +106,75 @@ export const getStudentDashboard = async (req, res) => {
 
         const recentAttempts = completedAttempts.slice(0, 5).map((att) => ({
             _id: att._id,
+            id: att._id,
             attemptId: att._id,
             title: att.title,
             type: att.type,
-            score: `${att.score}/${att.totalMarks}`,
-            accuracy: att.accuracy,
+            score: att.score,
+            totalMarks: att.totalMarks || att.totalQuestions || 0,
+            percentage: att.accuracy || 0,
+            accuracy: att.accuracy || 0,
+            submittedAt: att.submittedAt || att.createdAt,
             date: att.createdAt,
+            passed: att.result === "Passed",
             status: att.result || "Needs Review",
             timeSpentMinutes: Math.round((att.timeSpentSeconds || 0) / 60),
         }));
 
-        // Topic-wise progress summary
-        const topicProgress = [
-            { topic: "Time and Work", category: "Quantitative Aptitude", accuracy: 82, questionsAttempted: 24, status: "Strong" },
-            { topic: "Profit and Loss", category: "Quantitative Aptitude", accuracy: 52, questionsAttempted: 18, status: "Needs Practice" },
-            { topic: "Number Series", category: "Logical Reasoning", accuracy: 78, questionsAttempted: 22, status: "Proficient" },
-            { topic: "Syllogisms", category: "Logical Reasoning", accuracy: 88, questionsAttempted: 16, status: "Strong" },
-            { topic: "Grammar & Error Spotting", category: "Verbal Ability", accuracy: 70, questionsAttempted: 20, status: "Proficient" }
+        // Dynamic Weak & Strong topics calculated from real attempts
+        const weakTopics = topicList
+            .filter((t) => Math.round((t.correct / t.total) * 100) < 70)
+            .map((t) => ({
+                topic: t.topic,
+                category: t.category,
+                accuracy: Math.round((t.correct / t.total) * 100),
+                totalQuestions: t.total,
+                status: "Needs Practice",
+            }));
+
+        const strongTopics = topicList
+            .filter((t) => Math.round((t.correct / t.total) * 100) >= 70)
+            .map((t) => ({
+                topic: t.topic,
+                category: t.category,
+                accuracy: Math.round((t.correct / t.total) * 100),
+                totalQuestions: t.total,
+                status: "Strong",
+            }));
+
+        const metricCards = [
+            {
+                id: "tests-completed",
+                label: "Tests Completed",
+                value: testsCompleted,
+                subtext: "Across practice & mock tests",
+                icon: "FileCheck",
+                color: "teal",
+            },
+            {
+                id: "avg-accuracy",
+                label: "Average Accuracy",
+                value: `${avgAccuracy}%`,
+                subtext: "Placement benchmark: 75%+",
+                icon: "Target",
+                color: "emerald",
+            },
+            {
+                id: "study-time",
+                label: "Study Time",
+                value: `${studyTimeHours} hrs`,
+                subtext: "Time spent practicing",
+                icon: "Clock",
+                color: "amber",
+            },
+            {
+                id: "pass-rate",
+                label: "Pass Rate",
+                value: `${passRate}%`,
+                subtext: `${passedCount} of ${testsCompleted} passed`,
+                icon: "Award",
+                color: "indigo",
+            },
         ];
 
         return res.json({
@@ -128,40 +191,35 @@ export const getStudentDashboard = async (req, res) => {
                     studentId: req.user.studentId,
                 },
                 metrics: {
-                    testsCompleted: testsCompleted || 8,
+                    testsCompleted,
                     averageAccuracy: avgAccuracy,
-                    studyTimeHours: studyTimeHours || 14.5,
-                    passRate: passRate,
+                    studyTimeHours,
+                    passRate,
                 },
+                metricCards,
                 nextBestAction,
                 weeklyGoal: {
                     target: targetWeeklyTests,
-                    current: thisWeekCompleted || 2,
-                    percentage: weeklyPercentage || 50,
+                    current: thisWeekCompleted,
+                    percentage: weeklyPercentage,
                 },
-                recentAttempts: recentAttempts.length > 0 ? recentAttempts : [
-                    {
-                        attemptId: "att_mock_demo_1",
-                        title: "TCS NQT Full Length Simulation",
-                        type: "mock-test",
-                        score: "24/30",
-                        accuracy: 80,
-                        date: new Date().toISOString(),
-                        status: "Passed",
-                        timeSpentMinutes: 42
-                    },
-                    {
-                        attemptId: "att_mock_demo_2",
-                        title: "Time and Work Speed Drill",
-                        type: "practice",
-                        score: "8/10",
-                        accuracy: 80,
-                        date: new Date(Date.now() - 86400000).toISOString(),
-                        status: "Passed",
-                        timeSpentMinutes: 12
-                    }
-                ],
-                topicProgress,
+                weeklyProgress: {
+                    percentage: weeklyPercentage,
+                    current: thisWeekCompleted,
+                    target: targetWeeklyTests,
+                    label: "Weekly Mock Test Goal",
+                    subtext: `${Math.max(0, targetWeeklyTests - thisWeekCompleted)} test${targetWeeklyTests - thisWeekCompleted === 1 ? "" : "s"} remaining this week`,
+                },
+                recentAttempts,
+                weakTopics,
+                strongTopics,
+                topicProgress: topicList.map((t) => ({
+                    topic: t.topic,
+                    category: t.category,
+                    accuracy: Math.round((t.correct / t.total) * 100),
+                    questionsAttempted: t.total,
+                    status: Math.round((t.correct / t.total) * 100) >= 70 ? "Strong" : "Needs Practice",
+                })),
             },
         });
     } catch (error) {

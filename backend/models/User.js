@@ -53,6 +53,10 @@ const userSchema = new mongoose.Schema(
             type: Date,
             default: Date.now,
         },
+        dismissedIncorrectQuestions: {
+            type: [String],
+            default: [],
+        },
     },
     { timestamps: true }
 );
