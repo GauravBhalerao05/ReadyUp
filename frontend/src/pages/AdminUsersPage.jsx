@@ -9,7 +9,9 @@ import {
   Briefcase,
   GraduationCap,
   AlertCircle,
-  X
+  X,
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import { adminService } from '../services/adminService';
 import { useAuth } from '../context/AuthContext';
@@ -22,6 +24,8 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+
+  const [error, setError] = useState('');
 
   // Form 11 Modal: Provisioning
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -46,6 +50,8 @@ export default function AdminUsersPage() {
 
   const loadUsers = async () => {
     try {
+      setLoading(true);
+      setError('');
       const res = await adminService.getUsers({
         search: search || undefined,
         role: roleFilter || undefined,
@@ -54,14 +60,18 @@ export default function AdminUsersPage() {
       setUsers(res || []);
     } catch (err) {
       console.error('Failed to load users:', err);
+      setError(err.message || 'Failed to load user accounts.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadUsers();
-  }, [roleFilter, statusFilter]);
+    const timer = setTimeout(() => {
+      loadUsers();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, roleFilter, statusFilter]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -81,8 +91,8 @@ export default function AdminUsersPage() {
       setCreateError('Please enter a valid email address');
       return;
     }
-    if (createForm.password.length < 6) {
-      setCreateError('Password must be at least 6 characters long');
+    if (createForm.password.length < 8) {
+      setCreateError('Password must be at least 8 characters long');
       return;
     }
 
@@ -225,6 +235,23 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
+      {/* Error state */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-900 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={loadUsers}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-100 dark:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold hover:bg-rose-200 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Users Table */}
       <div className="bg-white dark:bg-slate-800/90 rounded-2xl border border-slate-100 dark:border-slate-800 card-shadow overflow-hidden">
         <div className="overflow-x-auto">
@@ -240,7 +267,29 @@ export default function AdminUsersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {users.map((u) => (
+              {loading ? (
+                <tr>
+                  <td colSpan="6" className="py-12 text-center text-slate-400">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-teal-600 dark:text-teal-400" />
+                    <p className="text-xs">Loading user accounts...</p>
+                  </td>
+                </tr>
+              ) : users.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="py-12 text-center text-slate-400">
+                    <Users className="w-8 h-8 mx-auto mb-2 opacity-30 text-slate-500" />
+                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      No user accounts found
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {search || roleFilter || statusFilter
+                        ? 'Try clearing or modifying your search filters.'
+                        : 'No accounts have been registered or provisioned yet.'}
+                    </p>
+                  </td>
+                </tr>
+              ) : (
+                users.map((u) => (
                 <tr key={u._id} className="hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
                   <td className="py-3.5 px-4">
                     <span className="font-bold text-slate-800 dark:text-slate-200 block">
@@ -284,7 +333,7 @@ export default function AdminUsersPage() {
                     </button>
                   </td>
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>
@@ -357,7 +406,7 @@ export default function AdminUsersPage() {
                     type="password"
                     value={createForm.password}
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                    placeholder="Min 6 characters"
+                    placeholder="Min 8 characters"
                     className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl"
                     required
                   />

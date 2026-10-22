@@ -6,13 +6,11 @@ import {
   Bookmark,
   CheckCircle2,
   Clock,
-  AlertTriangle,
   RotateCcw,
-  Send,
-  HelpCircle,
-  X
+  Send
 } from 'lucide-react';
 import { testService } from '../services/testService';
+import { bookmarkService } from '../services/bookmarkService';
 import { useToast } from '../context/ToastContext';
 import Badge from '../components/common/Badge';
 
@@ -98,14 +96,25 @@ export default function PracticeSessionPage() {
     }));
   };
 
-  const handleToggleMarkReview = () => {
+  const handleToggleMarkReview = async () => {
+    const isCurrentlyMarked = Boolean(answers[currentQ.questionId]?.markedForReview);
     setAnswers((prev) => ({
       ...prev,
       [currentQ.questionId]: {
         ...prev[currentQ.questionId],
-        markedForReview: !prev[currentQ.questionId]?.markedForReview
+        markedForReview: !isCurrentlyMarked
       }
     }));
+
+    try {
+      if (!isCurrentlyMarked) {
+        await bookmarkService.addBookmark(currentQ.questionId, 'Marked for Review');
+      } else {
+        await bookmarkService.removeBookmark(currentQ.questionId);
+      }
+    } catch (err) {
+      console.error('Failed to sync bookmark:', err);
+    }
   };
 
   const handleFinalSubmit = async () => {
@@ -124,12 +133,42 @@ export default function PracticeSessionPage() {
       const result = await testService.submitAttempt(session.attemptId, formattedAnswers);
       addToast({
         title: 'Practice Submitted!',
-        message: `Score: ${result.score}/${result.totalQuestions} (${result.percentage}%)`,
+        message: `Score: ${result.score}/${result.totalQuestions || result.totalMarks} (${result.percentage || result.accuracy}%)`,
         type: result.passed ? 'success' : 'warning'
       });
       setShowSubmitModal(false);
       navigate(`/tests/review/${session.attemptId}`, { state: { result } });
     } catch (err) {
+      const errData = err.data?.data || err.data;
+      const isExpired = errData?.status === 'expired' || err.message?.toLowerCase().includes('expired');
+      const isConflict = err.status === 409;
+
+      if (isExpired) {
+        addToast({
+          title: 'Session Expired',
+          message: 'Practice duration elapsed. Loading session review...',
+          type: 'warning'
+        });
+        setShowSubmitModal(false);
+        navigate(`/tests/review/${session.attemptId}`, {
+          state: { result: errData || { status: 'expired', score: 0, result: 'Failed' } }
+        });
+        return;
+      }
+
+      if (isConflict) {
+        addToast({
+          title: 'Already Submitted',
+          message: 'This practice session was already submitted. Loading review...',
+          type: 'info'
+        });
+        setShowSubmitModal(false);
+        navigate(`/tests/review/${session.attemptId}`, {
+          state: { result: errData }
+        });
+        return;
+      }
+
       addToast({
         title: 'Submission Error',
         message: err.message || 'Please retry',

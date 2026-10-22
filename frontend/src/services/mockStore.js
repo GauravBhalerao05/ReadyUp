@@ -10,7 +10,7 @@ import {
   initialBookmarks,
   initialCoordinatorData,
   initialAdminData
-} from './mockData';
+} from './mockData.js';
 
 const STORAGE_KEYS = {
   CATEGORIES: 'readyup_mock_categories',
@@ -28,6 +28,7 @@ const STORAGE_KEYS = {
 
 function getStored(key, defaultValue) {
   try {
+    if (typeof localStorage === 'undefined') return defaultValue;
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : defaultValue;
   } catch (err) {
@@ -38,10 +39,60 @@ function getStored(key, defaultValue) {
 
 function setStored(key, value) {
   try {
+    if (typeof localStorage === 'undefined') return;
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
     console.warn('Error saving to localStorage:', err);
   }
+}
+
+function parseCSVToRows(text) {
+  const cleanText = text.replace(/^\uFEFF/, '');
+  const rows = [];
+  let currentRow = [];
+  let currentCell = '';
+  let insideQuotes = false;
+
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
+
+    if (insideQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentCell += '"';
+        i++;
+      } else if (char === '"') {
+        insideQuotes = false;
+      } else {
+        currentCell += char;
+      }
+    } else {
+      if (char === '"') {
+        insideQuotes = true;
+      } else if (char === ',') {
+        currentRow.push(currentCell);
+        currentCell = '';
+      } else if (char === '\r') {
+        if (nextChar === '\n') i++;
+        currentRow.push(currentCell);
+        if (currentRow.some((c) => c.trim().length > 0)) rows.push(currentRow);
+        currentRow = [];
+        currentCell = '';
+      } else if (char === '\n') {
+        currentRow.push(currentCell);
+        if (currentRow.some((c) => c.trim().length > 0)) rows.push(currentRow);
+        currentRow = [];
+        currentCell = '';
+      } else {
+        currentCell += char;
+      }
+    }
+  }
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentCell);
+    if (currentRow.some((c) => c.trim().length > 0)) rows.push(currentRow);
+  }
+  return rows;
 }
 
 class MockStore {
@@ -550,94 +601,132 @@ class MockStore {
     };
   }
 
-  previewSpreadsheetImport({ file, parsedRows = [] }) {
+  async previewSpreadsheetImport({ file, parsedRows = [] }) {
     const importBatchId = 'batch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     const validRows = [];
     const errors = [];
+    const seenIds = new Set();
 
-    // If pre-parsed rows were passed, use them, otherwise generate sample preview rows based on filename
-    const sampleRows = parsedRows.length > 0 ? parsedRows : [
-      {
-        questionId: 'QA-TW-110',
-        questionText: 'A and B working together can complete a project in 10 days. If A alone takes 15 days, how many days will B take alone?',
-        optionA: '25 days',
-        optionB: '30 days',
-        optionC: '20 days',
-        optionD: '35 days',
-        correctOption: 'B',
-        explanation: "1/B = 1/10 - 1/15 = 1/30. B takes 30 days.",
-        category: 'Quantitative Aptitude',
-        topic: 'Time and Work',
-        difficulty: 'easy',
-        companies: 'TCS, Infosys'
-      },
-      {
-        questionId: 'LR-SY-102',
-        questionText: 'Statements: All networks are secure. Some connections are networks. Conclusions: I. Some connections are secure.',
-        optionA: 'Only I follows',
-        optionB: 'Only II follows',
-        optionC: 'Both follow',
-        optionD: 'Neither follows',
-        correctOption: 'A',
-        explanation: 'Connection is part of network which is secure, so some connections are definitely secure.',
-        category: 'Logical Reasoning',
-        topic: 'Syllogisms',
-        difficulty: 'medium',
-        companies: 'Cognizant'
-      },
-      {
-        questionId: 'QA-PL-ERR',
-        questionText: 'Too short',
-        optionA: '10',
-        optionB: '20',
-        optionC: '30',
-        optionD: '40',
-        correctOption: 'E', // invalid
-        explanation: 'Short',
-        category: 'Quantitative Aptitude',
-        topic: 'Profit and Loss',
-        difficulty: 'easy'
+    let candidateRows = [];
+
+    if (parsedRows && parsedRows.length > 0) {
+      candidateRows = parsedRows;
+    } else if (file) {
+      let fileText = '';
+      if (typeof file.text === 'function') {
+        fileText = await file.text();
+      } else if (typeof file === 'string') {
+        fileText = file;
+      } else if (file && typeof file.arrayBuffer === 'function') {
+        const buf = await file.arrayBuffer();
+        fileText = new TextDecoder('utf-8').decode(buf);
       }
-    ];
 
-    sampleRows.forEach((row, index) => {
-      const rowNum = index + 2; // header is row 1
+      if (fileText && fileText.trim().length > 0) {
+        const parsedGrid = parseCSVToRows(fileText);
+        if (parsedGrid.length < 2) {
+          throw new Error('Spreadsheet contains no data rows.');
+        }
+
+        const rawHeaders = parsedGrid[0];
+        const headerKeys = rawHeaders.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+        for (let i = 1; i < parsedGrid.length; i++) {
+          const rowValues = parsedGrid[i];
+          const rowObj = {};
+          headerKeys.forEach((key, colIdx) => {
+            rowObj[key] = rowValues[colIdx] !== undefined ? rowValues[colIdx].trim() : '';
+          });
+
+          candidateRows.push({
+            _rowNumber: i + 1,
+            questionId: (rowObj.questionid || rowObj.id || `IMP-${i + 1}`).toUpperCase(),
+            questionText: rowObj.questiontext || rowObj.question || '',
+            optionA: rowObj.optiona || rowObj.a || '',
+            optionB: rowObj.optionb || rowObj.b || '',
+            optionC: rowObj.optionc || rowObj.c || '',
+            optionD: rowObj.optiond || rowObj.d || '',
+            correctOption: (rowObj.correctoption || rowObj.answer || '').trim(),
+            explanation: rowObj.explanation || '',
+            category: rowObj.category || 'Quantitative Aptitude',
+            topic: rowObj.topic || 'General',
+            subtopic: rowObj.subtopic || '',
+            difficulty: (rowObj.difficulty || 'medium').toLowerCase(),
+            companies: rowObj.companies ? rowObj.companies.split(',').map((c) => c.trim()).filter(Boolean) : [],
+            source: rowObj.source || 'Spreadsheet Import',
+            year: rowObj.year ? Number(rowObj.year) : 2026
+          });
+        }
+      }
+    }
+
+    if (candidateRows.length === 0) {
+      throw new Error('Spreadsheet contains no data rows or could not be parsed.');
+    }
+
+    candidateRows.forEach((row, index) => {
+      const rowNum = row._rowNumber || index + 2;
       const rowErrors = [];
+      const qId = (row.questionId || '').toUpperCase();
+      const rawCorrect = (row.correctOption || '').trim();
+      const upperCorrect = rawCorrect.toUpperCase();
 
-      if (!row.questionId) rowErrors.push('Missing questionId');
+      if (!qId) rowErrors.push('Missing questionId');
       if (!row.questionText || row.questionText.length < 5) rowErrors.push('Question text must be at least 5 characters');
-      if (!['A', 'B', 'C', 'D'].includes((row.correctOption || '').toUpperCase())) {
-        rowErrors.push('Correct option must be one of A, B, C, or D');
+      if (!row.optionA || !row.optionB) rowErrors.push('Options A and B are required');
+      if (!['A', 'B', 'C', 'D'].includes(upperCorrect)) {
+        rowErrors.push(`Correct option must be one of A, B, C, or D (got '${rawCorrect}')`);
       }
       if (!row.category) rowErrors.push('Category is required');
       if (!row.topic) rowErrors.push('Topic is required');
 
+      if (seenIds.has(qId)) {
+        rowErrors.push(`Duplicate questionId '${qId}' within this file`);
+      } else if (qId) {
+        seenIds.add(qId);
+      }
+
       if (rowErrors.length > 0) {
         errors.push({
+          row: rowNum,
           rowNumber: rowNum,
-          questionId: row.questionId || `Row ${rowNum}`,
-          field: rowErrors[0].includes('option') ? 'correctOption' : 'questionText',
-          error: rowErrors.join(', ')
+          questionId: qId || `Row ${rowNum}`,
+          field: rowErrors[0].includes('option') ? 'correctOption' : (rowErrors[0].includes('Question') ? 'questionText' : 'general'),
+          error: rowErrors.join(', '),
+          messages: rowErrors
         });
       } else {
+        const isDuplicateInDb = this.questions.some((q) => q.questionId === qId);
         validRows.push({
           ...row,
-          correctOption: row.correctOption.toUpperCase(),
-          difficulty: (row.difficulty || 'medium').toLowerCase(),
-          companies: typeof row.companies === 'string' ? row.companies.split(',').map((c) => c.trim()) : (row.companies || [])
+          questionId: qId,
+          rowNumber: rowNum,
+          correctOption: upperCorrect,
+          options: [
+            { optionId: 'A', text: row.optionA },
+            { optionId: 'B', text: row.optionB },
+            ...(row.optionC ? [{ optionId: 'C', text: row.optionC }] : []),
+            ...(row.optionD ? [{ optionId: 'D', text: row.optionD }] : [])
+          ],
+          difficulty: ['easy', 'medium', 'hard'].includes(row.difficulty) ? row.difficulty : 'medium',
+          companies: Array.isArray(row.companies) ? row.companies : (typeof row.companies === 'string' ? row.companies.split(',').map((c) => c.trim()).filter(Boolean) : []),
+          isDuplicateInDb,
+          status: isDuplicateInDb ? 'Duplicate (Will Update)' : 'Valid',
+          errors: []
         });
       }
     });
 
     const stagedBatch = {
       importBatchId,
-      filename: file?.name || 'aptitude_questions_upload.xlsx',
-      totalRows: sampleRows.length,
+      filename: file?.name || 'aptitude_questions_upload.csv',
+      totalRows: candidateRows.length,
       validRowsCount: validRows.length,
       invalidRowsCount: errors.length,
       errors,
       validRows,
-      previewSample: validRows.slice(0, 5)
+      previewSample: validRows.slice(0, 5),
+      rows: validRows.slice(0, 50)
     };
 
     this.pendingBatches[importBatchId] = stagedBatch;

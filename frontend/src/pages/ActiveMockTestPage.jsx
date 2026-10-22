@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { testService } from '../services/testService';
+import { bookmarkService } from '../services/bookmarkService';
 import { useToast } from '../context/ToastContext';
 import Badge from '../components/common/Badge';
 
@@ -115,14 +116,25 @@ export default function ActiveMockTestPage() {
     }));
   };
 
-  const handleToggleMarkReview = () => {
+  const handleToggleMarkReview = async () => {
+    const isCurrentlyMarked = Boolean(answers[currentQ.questionId]?.markedForReview);
     setAnswers((prev) => ({
       ...prev,
       [currentQ.questionId]: {
         ...prev[currentQ.questionId],
-        markedForReview: !prev[currentQ.questionId]?.markedForReview
+        markedForReview: !isCurrentlyMarked
       }
     }));
+
+    try {
+      if (!isCurrentlyMarked) {
+        await bookmarkService.addBookmark(currentQ.questionId, 'Marked for Review');
+      } else {
+        await bookmarkService.removeBookmark(currentQ.questionId);
+      }
+    } catch (err) {
+      console.error('Failed to sync bookmark:', err);
+    }
   };
 
   const performSubmit = async () => {
@@ -144,11 +156,40 @@ export default function ActiveMockTestPage() {
       const result = await testService.submitAttempt(session.attemptId || attemptId, formattedAnswers);
       addToast({
         title: 'Mock Test Scored',
-        message: `Your score: ${result.score}/${result.totalQuestions} (${result.percentage}%)`,
+        message: `Your score: ${result.score}/${result.totalQuestions || result.totalMarks} (${result.percentage || result.accuracy}%)`,
         type: result.passed ? 'success' : 'warning'
       });
       navigate(`/tests/review/${session.attemptId || attemptId}`, { state: { result } });
     } catch (err) {
+      const errData = err.data?.data || err.data;
+      const isExpired = errData?.status === 'expired' || err.message?.toLowerCase().includes('expired');
+      const isConflict = err.status === 409;
+
+      if (isExpired) {
+        addToast({
+          title: 'Test Expired',
+          message: 'The allowed test duration has elapsed. Navigating to your review...',
+          type: 'warning'
+        });
+        navigate(`/tests/review/${session.attemptId || attemptId}`, {
+          state: { result: errData || { status: 'expired', score: 0, result: 'Failed' } }
+        });
+        return;
+      }
+
+      if (isConflict) {
+        addToast({
+          title: 'Already Submitted',
+          message: 'This test was previously submitted. Navigating to review...',
+          type: 'info'
+        });
+        navigate(`/tests/review/${session.attemptId || attemptId}`, {
+          state: { result: errData }
+        });
+        return;
+      }
+
+      // For network or transient server errors, allow retry
       isSubmittedRef.current = false;
       addToast({
         title: 'Submission Failed',

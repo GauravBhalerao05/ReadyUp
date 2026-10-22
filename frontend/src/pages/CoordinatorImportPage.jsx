@@ -132,6 +132,9 @@ export default function CoordinatorImportPage() {
     setFile(null);
     setPreviewData(null);
     setImportSummary(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   return (
@@ -248,6 +251,9 @@ export default function CoordinatorImportPage() {
               type="file"
               accept=".xlsx,.xls,.csv"
               onChange={(e) => e.target.files?.[0] && handleFileSelected(e.target.files[0])}
+              onClick={(e) => {
+                e.target.value = null;
+              }}
               className="hidden"
             />
 
@@ -329,7 +335,7 @@ export default function CoordinatorImportPage() {
               <div className="max-h-40 overflow-y-auto space-y-1.5 pl-6">
                 {previewData.errors.map((err, i) => (
                   <p key={i} className="text-xs text-rose-700 dark:text-rose-300">
-                    <span className="font-bold">Row {err.rowNumber}:</span> {err.questionId} — {err.error} (Field: {err.field})
+                    <span className="font-bold">Row {err.rowNumber || err.row}:</span> {err.questionId} — {err.error || (Array.isArray(err.messages) ? err.messages.join(', ') : err.message)} {err.field ? `(Field: ${err.field})` : ''}
                   </p>
                 ))}
               </div>
@@ -352,7 +358,7 @@ export default function CoordinatorImportPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {(previewData.previewSample || previewData.validRows || []).slice(0, 5).map((row, idx) => (
+                  {(previewData.previewSample || previewData.validRows || previewData.rows || []).slice(0, 5).map((row, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/50">
                       <td className="py-2.5 px-3 font-mono font-bold text-teal-600">
                         {row.questionId}

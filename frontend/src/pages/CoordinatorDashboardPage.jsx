@@ -47,8 +47,44 @@ export default function CoordinatorDashboardPage() {
     );
   }
 
-  const metrics = data?.metrics || [];
-  const recentImports = data?.importHistory || [];
+  const rawMetrics = data?.metrics;
+  const metrics = Array.isArray(rawMetrics)
+    ? rawMetrics
+    : Array.isArray(data?.metricCards)
+    ? data.metricCards
+    : rawMetrics
+    ? [
+        {
+          label: 'Total Questions',
+          value: rawMetrics.totalQuestions ?? 0,
+          subtext: `${rawMetrics.activeQuestions ?? 0} active in live repository`,
+          icon: 'BookOpen',
+          color: 'teal'
+        },
+        {
+          label: 'Verified Content',
+          value: rawMetrics.verifiedQuestions ?? 0,
+          subtext: 'Reviewed by placement faculty',
+          icon: 'CheckCircle2',
+          color: 'emerald'
+        },
+        {
+          label: 'Active Mock Tests',
+          value: rawMetrics.activeTests ?? 0,
+          subtext: 'Available for student simulations',
+          icon: 'FolderGit2',
+          color: 'amber'
+        },
+        {
+          label: 'Pending Review',
+          value: rawMetrics.needsReview ?? 0,
+          subtext: 'Requires coordinator validation',
+          icon: 'FileSpreadsheet',
+          color: 'rose'
+        }
+      ]
+    : [];
+  const recentImports = data?.importHistory || data?.recentImports || [];
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">

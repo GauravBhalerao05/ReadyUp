@@ -50,25 +50,15 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickLogin = async (demoEmail, demoPass) => {
+  const handleFillCredentials = (demoEmail, demoPass, roleName) => {
     setEmail(demoEmail);
     setPassword(demoPass);
-    setIsLoading(true);
-    try {
-      const res = await login(demoEmail, demoPass);
-      addToast({
-        title: `Logged in as ${res.user.name}`,
-        message: `Role: ${res.user.role.toUpperCase()}`,
-        type: 'success'
-      });
-      if (res.user.role === 'coordinator') navigate('/coordinator/dashboard');
-      else if (res.user.role === 'admin') navigate('/admin/dashboard');
-      else navigate('/dashboard');
-    } catch (err) {
-      setError(err.message || 'Login failed');
-    } finally {
-      setIsLoading(false);
-    }
+    setError('');
+    addToast({
+      title: `${roleName} Credentials Populated`,
+      message: 'Click "Sign In" to authenticate with the backend server.',
+      type: 'info'
+    });
   };
 
   return (
@@ -149,29 +139,29 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Quick Demo Credentials */}
+          {/* Quick Demo Credentials Autofill */}
           <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-700/80">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider text-center mb-3">
-              Quick Demo Accounts
+              Fill Demo Credentials (Requires Sign In)
             </p>
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => handleQuickLogin('student@readyup.edu', 'Password123!')}
+                onClick={() => handleFillCredentials('student@readyup.edu', 'Password123!', 'Student')}
                 className="p-2 rounded-xl border border-teal-200 dark:border-teal-900/60 bg-teal-50/60 dark:bg-teal-950/40 hover:bg-teal-100 text-teal-800 dark:text-teal-300 text-center text-xs font-semibold transition-all cursor-pointer"
               >
                 Student
               </button>
               <button
                 type="button"
-                onClick={() => handleQuickLogin('coordinator@readyup.edu', 'Password123!')}
+                onClick={() => handleFillCredentials('coordinator@readyup.edu', 'Password123!', 'Coordinator')}
                 className="p-2 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-800 dark:text-amber-300 text-center text-xs font-semibold transition-all cursor-pointer"
               >
                 Coordinator
               </button>
               <button
                 type="button"
-                onClick={() => handleQuickLogin('admin@readyup.edu', 'Password123!')}
+                onClick={() => handleFillCredentials('admin@readyup.edu', 'Password123!', 'Admin')}
                 className="p-2 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50/60 dark:bg-sky-950/40 hover:bg-sky-100 text-sky-800 dark:text-sky-300 text-center text-xs font-semibold transition-all cursor-pointer"
               >
                 Admin

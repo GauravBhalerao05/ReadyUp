@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   BookOpen,
   Plus,
@@ -16,10 +17,13 @@ import { useToast } from '../context/ToastContext';
 import Badge from '../components/common/Badge';
 
 export default function CoordinatorQuestionsPage() {
+  const [searchParams] = useSearchParams();
+  const urlSearch = searchParams.get('search') || searchParams.get('q') || '';
+
   const [questions, setQuestions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(urlSearch);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [difficultyFilter, setDifficultyFilter] = useState('');
 
@@ -47,11 +51,12 @@ export default function CoordinatorQuestionsPage() {
 
   const { addToast } = useToast();
 
-  const loadData = async () => {
+  const loadData = async (overrideSearch) => {
     try {
+      const activeSearch = overrideSearch !== undefined ? overrideSearch : search;
       const [qRes, catRes] = await Promise.all([
         questionService.getQuestions({
-          search: search || undefined,
+          search: activeSearch || undefined,
           category: categoryFilter || undefined,
           difficulty: difficultyFilter || undefined
         }),
@@ -67,8 +72,8 @@ export default function CoordinatorQuestionsPage() {
   };
 
   useEffect(() => {
-    loadData();
-  }, [categoryFilter, difficultyFilter]);
+    loadData(urlSearch);
+  }, [categoryFilter, difficultyFilter, urlSearch]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();

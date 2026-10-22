@@ -46,7 +46,43 @@ export default function AdminDashboardPage() {
     );
   }
 
-  const metrics = data?.metrics || [];
+  const rawMetrics = data?.metrics;
+  const metrics = Array.isArray(rawMetrics)
+    ? rawMetrics
+    : Array.isArray(data?.metricCards)
+    ? data.metricCards
+    : rawMetrics
+    ? [
+        {
+          label: 'Total Registered Users',
+          value: rawMetrics.totalUsers ?? 0,
+          subtext: `${rawMetrics.activeAccounts ?? 0} active platform accounts`,
+          icon: 'Users',
+          color: 'sky'
+        },
+        {
+          label: 'Active Students',
+          value: rawMetrics.activeStudents ?? 0,
+          subtext: 'Eligible for campus placement tests',
+          icon: 'GraduationCap',
+          color: 'teal'
+        },
+        {
+          label: 'Test Attempts',
+          value: rawMetrics.totalAttempts ?? 0,
+          subtext: 'Completed mock tests & drills',
+          icon: 'Activity',
+          color: 'amber'
+        },
+        {
+          label: 'Platform Pass Rate',
+          value: `${rawMetrics.platformPassRate ?? 0}%`,
+          subtext: 'Platform-wide cut-off compliance',
+          icon: 'TrendingUp',
+          color: 'emerald'
+        }
+      ]
+    : [];
   const recentLogs = data?.recentAuditLogs || [];
 
   return (

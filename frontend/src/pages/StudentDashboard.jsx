@@ -58,16 +58,57 @@ export default function StudentDashboard() {
     );
   }
 
-  const metrics = data?.metrics || [];
+  const rawMetrics = data?.metrics;
+  const metrics = Array.isArray(rawMetrics)
+    ? rawMetrics
+    : Array.isArray(data?.metricCards)
+    ? data.metricCards
+    : rawMetrics
+    ? [
+        {
+          id: 'tests-completed',
+          label: 'Tests Completed',
+          value: rawMetrics.testsCompleted ?? 0,
+          subtext: 'Across practice & mock tests',
+          icon: 'FileCheck',
+          color: 'teal',
+        },
+        {
+          id: 'avg-accuracy',
+          label: 'Average Accuracy',
+          value: `${rawMetrics.averageAccuracy ?? 0}%`,
+          subtext: 'Placement target: 75%+',
+          icon: 'Target',
+          color: 'emerald',
+        },
+        {
+          id: 'study-time',
+          label: 'Study Time',
+          value: `${rawMetrics.studyTimeHours ?? 0} hrs`,
+          subtext: 'Time spent practicing',
+          icon: 'Clock',
+          color: 'amber',
+        },
+        {
+          id: 'pass-rate',
+          label: 'Pass Rate',
+          value: `${rawMetrics.passRate ?? 0}%`,
+          subtext: 'Tests meeting cut-off',
+          icon: 'Award',
+          color: 'indigo',
+        },
+      ]
+    : [];
+
   const nextAction = data?.nextBestAction || {
     label: 'NEXT BEST ACTION',
-    title: 'Practice Time and Work',
-    description: 'Your accuracy in Time and Work is currently 50%. Solve a curated 10-question practice set to build speed and accuracy.',
+    title: 'Time and Work Speed Drill',
+    description: 'Solve a curated 10-question practice set to build core aptitude speed and accuracy for placement rounds.',
     ctaText: 'Start Practice →',
     targetTopic: 'Time and Work',
     targetCategory: 'Quantitative Aptitude'
   };
-  const weekly = data?.weeklyProgress || { percentage: 75, current: 3, target: 4, label: 'Weekly Mock Test Goal', subtext: '1 test remaining this week' };
+  const weekly = data?.weeklyProgress || data?.weeklyGoal || { percentage: 0, current: 0, target: 4, label: 'Weekly Mock Test Goal', subtext: '4 tests remaining this week' };
   const recentAttempts = data?.recentAttempts || [];
   const weakTopics = data?.weakTopics || [];
   const strongTopics = data?.strongTopics || [];
@@ -137,34 +178,52 @@ export default function StudentDashboard() {
 
             {/* List of Attempt items matching screenshot cards */}
             <div className="space-y-3">
-              {recentAttempts.map((attempt) => (
-                <div
-                  key={attempt.id}
-                  onClick={() => navigate(`/tests/review/${attempt.id}`)}
-                  className="flex items-center justify-between p-4 rounded-xl border border-slate-100 dark:border-slate-700/60 hover:border-teal-200 dark:hover:border-teal-800/60 bg-slate-50/50 dark:bg-slate-900/40 hover:bg-teal-50/30 dark:hover:bg-teal-950/20 transition-all cursor-pointer group"
-                >
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 flex items-center justify-center shrink-0">
-                      <Lightbulb className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 truncate group-hover:text-teal-700 dark:group-hover:text-teal-400 transition-colors">
-                        {attempt.title}
-                      </h4>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
-                        Score: {attempt.score}/{attempt.totalMarks} • {attempt.percentage}% • {new Date(attempt.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 shrink-0">
-                    <Badge variant={attempt.passed ? 'Passed' : 'Needs Review'}>
-                      {attempt.passed ? 'Passed' : 'Needs Review'}
-                    </Badge>
-                    <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-teal-600 transition-colors" />
-                  </div>
+              {recentAttempts.length === 0 ? (
+                <div className="p-8 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-900/40">
+                  <Lightbulb className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                    No attempts logged yet
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                    Complete your first aptitude practice session or mock test to view detailed solution review and performance trends here.
+                  </p>
+                  <button
+                    onClick={() => navigate('/practice')}
+                    className="mt-3.5 px-4 py-1.5 rounded-full bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  >
+                    Start First Practice Drill
+                  </button>
                 </div>
-              ))}
+              ) : (
+                recentAttempts.map((attempt) => (
+                  <div
+                    key={attempt.id || attempt._id}
+                    onClick={() => navigate(`/tests/review/${attempt.id || attempt._id}`)}
+                    className="flex items-center justify-between p-4 rounded-xl border border-slate-100 dark:border-slate-700/60 hover:border-teal-200 dark:hover:border-teal-800/60 bg-slate-50/50 dark:bg-slate-900/40 hover:bg-teal-50/30 dark:hover:bg-teal-950/20 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 flex items-center justify-center shrink-0">
+                        <Lightbulb className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 truncate group-hover:text-teal-700 dark:group-hover:text-teal-400 transition-colors">
+                          {attempt.title}
+                        </h4>
+                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                          Score: {attempt.score}/{attempt.totalMarks} • {attempt.percentage ?? attempt.accuracy}% • {new Date(attempt.submittedAt || attempt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      <Badge variant={attempt.passed ? 'Passed' : 'Needs Review'}>
+                        {attempt.passed ? 'Passed' : 'Needs Review'}
+                      </Badge>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-teal-600 transition-colors" />
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -210,61 +269,80 @@ export default function StudentDashboard() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Weak Topics */}
-          {weakTopics.map((top) => (
-            <div
-              key={top.topic}
-              onClick={() => navigate(`/practice?topic=${encodeURIComponent(top.topic)}`)}
-              className="bg-white dark:bg-slate-800/90 rounded-2xl p-5 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all cursor-pointer group flex flex-col justify-between"
+        {weakTopics.length === 0 && strongTopics.length === 0 ? (
+          <div className="bg-white dark:bg-slate-800/90 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 card-shadow text-center">
+            <Brain className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+            <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+              Personalized Concept Mastery Calibration
+            </h4>
+            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              Complete practice drills in Quantitative, Logical, and Verbal aptitude to calibrate your strengths, identify cut-off weak areas, and generate target topics.
+            </p>
+            <button
+              onClick={() => navigate('/practice')}
+              className="mt-3.5 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
             >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[11px] font-mono text-slate-400">QA-FOCUS</span>
-                  <Badge variant="warning">{top.accuracy}% Accuracy</Badge>
+              <span>Explore Practice Topics</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Weak Topics */}
+            {weakTopics.map((top) => (
+              <div
+                key={top.topic}
+                onClick={() => navigate(`/practice?topic=${encodeURIComponent(top.topic)}`)}
+                className="bg-white dark:bg-slate-800/90 rounded-2xl p-5 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-mono text-slate-400">QA-FOCUS</span>
+                    <Badge variant="warning">{top.accuracy}% Accuracy</Badge>
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
+                    {top.topic}
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                    {top.category} • {top.totalQuestions} questions attempted. Accuracy is below the 60% placement benchmark.
+                  </p>
                 </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
-                  {top.topic}
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                  {top.category} • {top.totalQuestions} questions attempted. Accuracy is below the 60% placement benchmark.
-                </p>
-              </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-teal-600 font-semibold">
-                <span>Start 10-Q Drill</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-              </div>
-            </div>
-          ))}
-
-          {/* Strong Topic */}
-          {strongTopics.slice(0, 1).map((top) => (
-            <div
-              key={top.topic}
-              onClick={() => navigate(`/practice?topic=${encodeURIComponent(top.topic)}`)}
-              className="bg-white dark:bg-slate-800/90 rounded-2xl p-5 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[11px] font-mono text-slate-400">QA-STRONG</span>
-                  <Badge variant="success">{top.accuracy}% Accuracy</Badge>
+                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-teal-600 font-semibold">
+                  <span>Start 10-Q Drill</span>
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
                 </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
-                  {top.topic}
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                  {top.category} • {top.totalQuestions} questions attempted. Strong concept mastery. Maintain with timed mock tests.
-                </p>
               </div>
+            ))}
 
-              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-emerald-600 font-semibold">
-                <span>Maintain Speed</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            {/* Strong Topic */}
+            {strongTopics.slice(0, 1).map((top) => (
+              <div
+                key={top.topic}
+                onClick={() => navigate(`/practice?topic=${encodeURIComponent(top.topic)}`)}
+                className="bg-white dark:bg-slate-800/90 rounded-2xl p-5 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-mono text-slate-400">QA-STRONG</span>
+                    <Badge variant="success">{top.accuracy}% Accuracy</Badge>
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
+                    {top.topic}
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                    {top.category} • {top.totalQuestions} questions attempted. Strong concept mastery. Maintain with timed mock tests.
+                  </p>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-emerald-600 font-semibold">
+                  <span>Maintain Speed</span>
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

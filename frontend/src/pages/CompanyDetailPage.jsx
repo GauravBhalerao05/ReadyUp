@@ -16,6 +16,17 @@ import { testService } from '../services/testService';
 import { useToast } from '../context/ToastContext';
 import Badge from '../components/common/Badge';
 
+function formatHiringPattern(hp) {
+  if (!hp) return 'Online Assessment: 60 mins • Quantitative, Logical & Verbal Aptitude';
+  if (typeof hp === 'string') return hp;
+  const dur = hp.testDuration || 60;
+  const total = hp.totalQuestions || 30;
+  const sections = Array.isArray(hp.sections) && hp.sections.length > 0
+    ? hp.sections.map((s) => (typeof s === 'string' ? s : s.name)).filter(Boolean).join(', ')
+    : 'Quantitative, Logical & Verbal';
+  return `${dur} mins • ${total} Questions (${sections})`;
+}
+
 export default function CompanyDetailPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
@@ -130,7 +141,7 @@ export default function CompanyDetailPage() {
               <span>Start 10-Q Practice Drill</span>
             </button>
             <button
-              onClick={() => navigate('/tests')}
+              onClick={() => navigate(`/tests?company=${encodeURIComponent(company.name)}&type=company_mock`)}
               className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 text-slate-700 dark:text-slate-200 font-bold text-xs sm:text-sm transition-all cursor-pointer"
             >
               <Timer className="w-4 h-4" />
@@ -152,7 +163,7 @@ export default function CompanyDetailPage() {
           </div>
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 mb-4">
             <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
-              {company.hiringPattern}
+              {formatHiringPattern(company.hiringPattern)}
             </p>
           </div>
           {company.rounds && (

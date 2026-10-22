@@ -38,7 +38,7 @@ export const coordinatorService = {
   async confirmImport(importBatchId) {
     const res = await apiClient.request('/coordinator/import/confirm', {
       method: 'POST',
-      data: { importBatchId }
+      data: { importBatchId, batchId: importBatchId }
     });
     return res.data;
   },

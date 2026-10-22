@@ -13,6 +13,17 @@ import {
 import { companyService } from '../services/companyService';
 import Badge from '../components/common/Badge';
 
+function formatHiringPattern(hp) {
+  if (!hp) return 'Online Assessment: 60 mins • Quantitative, Logical & Verbal Aptitude';
+  if (typeof hp === 'string') return hp;
+  const dur = hp.testDuration || 60;
+  const total = hp.totalQuestions || 30;
+  const sections = Array.isArray(hp.sections) && hp.sections.length > 0
+    ? hp.sections.map((s) => (typeof s === 'string' ? s : s.name)).filter(Boolean).join(', ')
+    : 'Quantitative, Logical & Verbal';
+  return `${dur} mins • ${total} Questions (${sections})`;
+}
+
 export default function CompanyDirectoryPage() {
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState('');
@@ -33,11 +44,16 @@ export default function CompanyDirectoryPage() {
     loadCompanies();
   }, []);
 
-  const filteredCompanies = companies.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.tagline?.toLowerCase().includes(search.toLowerCase()) ||
-    c.keyTopics?.some((t) => t.toLowerCase().includes(search.toLowerCase()))
-  );
+  const filteredCompanies = companies.filter((c) => {
+    const q = search.toLowerCase();
+    const patternStr = typeof c.hiringPattern === 'string' ? c.hiringPattern : '';
+    return (
+      c.name?.toLowerCase().includes(q) ||
+      c.tagline?.toLowerCase().includes(q) ||
+      patternStr.toLowerCase().includes(q) ||
+      c.keyTopics?.some((t) => t.toLowerCase().includes(q))
+    );
+  });
 
   if (loading) {
     return (
@@ -117,7 +133,7 @@ export default function CompanyDirectoryPage() {
                   Exam Pattern
                 </span>
                 <p className="text-xs text-slate-700 dark:text-slate-300 font-medium line-clamp-2">
-                  {comp.hiringPattern}
+                  {formatHiringPattern(comp.hiringPattern)}
                 </p>
               </div>
 

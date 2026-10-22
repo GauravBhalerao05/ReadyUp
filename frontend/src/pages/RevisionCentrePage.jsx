@@ -4,12 +4,10 @@ import {
   BookmarkCheck,
   AlertCircle,
   Trash2,
-  Play,
   RotateCcw,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  FileQuestion,
   StickyNote
 } from 'lucide-react';
 import { bookmarkService } from '../services/bookmarkService';
@@ -45,10 +43,12 @@ export default function RevisionCentrePage() {
     loadRevisionData();
   }, []);
 
-  const handleDeleteBookmark = async (questionId) => {
+  const [deletingIncorrectId, setDeletingIncorrectId] = useState(null);
+
+  const handleDeleteBookmark = async (id) => {
     try {
-      await bookmarkService.removeBookmark(questionId);
-      setBookmarks((prev) => prev.filter((b) => b.questionId !== questionId && b._id !== questionId));
+      await bookmarkService.removeBookmark(id);
+      setBookmarks((prev) => prev.filter((b) => b.questionId !== id && b._id !== id && b.bookmarkId !== id));
       addToast({
         title: 'Bookmark Removed',
         message: 'Question removed from your revision list',
@@ -56,6 +56,25 @@ export default function RevisionCentrePage() {
       });
     } catch (err) {
       addToast({ title: 'Error', message: err.message, type: 'error' });
+    }
+  };
+
+  const handleDeleteIncorrect = async (id) => {
+    setDeletingIncorrectId(id);
+    try {
+      await testService.removeIncorrectQuestion(id);
+      setIncorrectQuestions((prev) =>
+        prev.filter((q) => q.questionId !== id && q._id !== id)
+      );
+      addToast({
+        title: 'Removed from Revision',
+        message: 'Question removed from your revision history',
+        type: 'info'
+      });
+    } catch (err) {
+      addToast({ title: 'Error', message: err.message, type: 'error' });
+    } finally {
+      setDeletingIncorrectId(null);
     }
   };
 
@@ -146,7 +165,9 @@ export default function RevisionCentrePage() {
       {activeTab === 'bookmarks' && (
         <div className="space-y-4">
           {bookmarks.map((bmk) => {
-            const q = bmk.question || {};
+            const q = bmk.question || bmk;
+            const qId = bmk.questionId || q.questionId;
+            const note = bmk.note || bmk.notes;
             const isExp = expanded[bmk._id];
             return (
               <div
@@ -156,7 +177,7 @@ export default function RevisionCentrePage() {
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <span className="text-xs font-mono font-bold text-teal-600">
-                      {bmk.questionId}
+                      {qId}
                     </span>
                     <Badge variant={q.difficulty || 'medium'}>{q.difficulty || 'medium'}</Badge>
                     <span className="text-xs text-slate-400 capitalize hidden sm:inline">
@@ -173,7 +194,7 @@ export default function RevisionCentrePage() {
                       {isExp ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
                     <button
-                      onClick={() => handleDeleteBookmark(bmk.questionId)}
+                      onClick={() => handleDeleteBookmark(qId || bmk._id)}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
                       title="Remove Bookmark"
                     >
@@ -183,19 +204,19 @@ export default function RevisionCentrePage() {
                 </div>
 
                 {/* Personal Note */}
-                {bmk.note && (
+                {note && (
                   <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-200/50 dark:border-amber-900/40 text-xs text-amber-900 dark:text-amber-200">
                     <StickyNote className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div>
                       <span className="font-bold">Your Revision Memo: </span>
-                      {bmk.note}
+                      {note}
                     </div>
                   </div>
                 )}
 
                 {/* Question Statement */}
                 <p className="text-sm font-semibold text-slate-900 dark:text-white leading-relaxed">
-                  {q.questionText || 'Practice question statement'}
+                  {q.questionText || bmk.questionText || 'Practice question statement'}
                 </p>
 
                 {/* Expanded Details */}
@@ -261,7 +282,17 @@ export default function RevisionCentrePage() {
                   <Badge variant="rose">Missed in Past Test</Badge>
                   <span className="text-xs text-slate-400">{q.topic}</span>
                 </div>
-                <Badge variant={q.difficulty}>{q.difficulty}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={q.difficulty}>{q.difficulty}</Badge>
+                  <button
+                    onClick={() => handleDeleteIncorrect(q.questionId || q._id)}
+                    disabled={deletingIncorrectId === (q.questionId || q._id)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer disabled:opacity-40"
+                    title="Remove from Revision"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <p className="text-sm font-semibold text-slate-900 dark:text-white leading-relaxed">

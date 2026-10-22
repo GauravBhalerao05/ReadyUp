@@ -9,22 +9,44 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem('readyup_auth_user');
-      return saved ? JSON.parse(saved) : initialAdminData.users[0]; // Default to student Aarav Sharma
+      const token = apiClient.getToken();
+      if (saved && token) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && parsed.email) {
+          return parsed;
+        }
+      }
+      return null;
     } catch {
-      return initialAdminData.users[0];
+      return null;
     }
   });
 
-  const [token, setToken] = useState(() => apiClient.getToken() || 'mock_jwt_token_student');
+  const [token, setToken] = useState(() => {
+    try {
+      const saved = localStorage.getItem('readyup_auth_user');
+      const savedToken = apiClient.getToken();
+      if (saved && savedToken) {
+        return savedToken;
+      }
+      apiClient.clearToken();
+      return null;
+    } catch {
+      apiClient.clearToken();
+      return null;
+    }
+  });
+
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (user) {
+    if (user && token) {
       localStorage.setItem('readyup_auth_user', JSON.stringify(user));
     } else {
       localStorage.removeItem('readyup_auth_user');
+      apiClient.clearToken();
     }
-  }, [user]);
+  }, [user, token]);
 
   const login = async (email, password) => {
     setIsLoading(true);
@@ -32,6 +54,7 @@ export function AuthProvider({ children }) {
       const data = await authService.login(email, password);
       setUser(data.user);
       setToken(data.token);
+      apiClient.setToken(data.token);
       return data;
     } finally {
       setIsLoading(false);
@@ -44,6 +67,7 @@ export function AuthProvider({ children }) {
       const data = await authService.register(userData);
       setUser(data.user);
       setToken(data.token);
+      apiClient.setToken(data.token);
       return data;
     } finally {
       setIsLoading(false);
@@ -59,6 +83,7 @@ export function AuthProvider({ children }) {
       setUser(null);
       setToken(null);
       apiClient.clearToken();
+      localStorage.removeItem('readyup_auth_user');
     }
   };
 
@@ -69,7 +94,21 @@ export function AuthProvider({ children }) {
   };
 
   // Developer convenience switcher to quickly test Student, Coordinator, and Admin roles
-  const switchRoleDev = useCallback((newRole) => {
+  const switchRoleDev = useCallback(async (newRole) => {
+    const demoEmail = `${newRole}@readyup.edu`;
+    const demoPass = 'Password123!';
+    try {
+      const res = await authService.login(demoEmail, demoPass);
+      if (res && res.token && !res.token.startsWith('mock_')) {
+        setUser(res.user);
+        setToken(res.token);
+        apiClient.setToken(res.token);
+        return res;
+      }
+    } catch {
+      // Backend offline or unreachable, fallback to development mock user
+    }
+
     const matchingUser = initialAdminData.users.find((u) => u.role === newRole) || {
       _id: 'usr_dev_' + newRole,
       name: newRole === 'admin' ? 'Dr. Vikram Malhotra' : newRole === 'coordinator' ? 'Prof. Sunita Patil' : 'Aarav Sharma',

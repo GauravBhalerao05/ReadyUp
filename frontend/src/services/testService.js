@@ -50,9 +50,16 @@ export const testService = {
     return res.data;
   },
 
-  async getIncorrectQuestions(limit = 20) {
+  async getIncorrectQuestions(limit = 100) {
     const res = await apiClient.request(`/tests/incorrect?limit=${limit}`, {
       method: 'GET'
+    });
+    return res.data;
+  },
+
+  async removeIncorrectQuestion(questionId) {
+    const res = await apiClient.request(`/tests/incorrect/${encodeURIComponent(questionId)}`, {
+      method: 'DELETE'
     });
     return res.data;
   }

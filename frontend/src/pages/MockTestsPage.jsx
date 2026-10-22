@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Timer,
   Play,
@@ -10,15 +10,24 @@ import {
   Layers,
   ChevronRight,
   ShieldCheck,
+  Building2,
+  Filter,
   X
 } from 'lucide-react';
 import { testService } from '../services/testService';
+import { companyService } from '../services/companyService';
 import { useToast } from '../context/ToastContext';
 import Badge from '../components/common/Badge';
 
 export default function MockTestsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const companyQuery = searchParams.get('company') || '';
+  const typeQuery = searchParams.get('type') || 'all';
+
   const [mockTests, setMockTests] = useState([]);
-  const [selectedType, setSelectedType] = useState('all');
+  const [companies, setCompanies] = useState([]);
+  const [selectedType, setSelectedType] = useState(typeQuery);
+  const [selectedCompany, setSelectedCompany] = useState(companyQuery);
   const [loading, setLoading] = useState(true);
 
   // Modal for test start confirmation & instructions
@@ -28,10 +37,40 @@ export default function MockTestsPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
 
+  // Sync state if URL search parameters change (e.g. browser back/forward)
+  useEffect(() => {
+    const cParam = searchParams.get('company') || '';
+    const tParam = searchParams.get('type') || 'all';
+    setSelectedCompany(cParam);
+    setSelectedType(tParam);
+  }, [searchParams]);
+
+  // Load companies for the filter bar
+  useEffect(() => {
+    async function loadCompanies() {
+      try {
+        const compList = await companyService.getCompanies();
+        setCompanies(compList || []);
+      } catch (err) {
+        console.error('Failed to load companies for filter:', err);
+      }
+    }
+    loadCompanies();
+  }, []);
+
+  // Fetch mock tests whenever selectedType or selectedCompany changes
   useEffect(() => {
     async function loadTests() {
+      setLoading(true);
       try {
-        const res = await testService.getMockTests();
+        const params = {};
+        if (selectedType && selectedType !== 'all') {
+          params.type = selectedType;
+        }
+        if (selectedCompany) {
+          params.company = selectedCompany;
+        }
+        const res = await testService.getMockTests(params);
         setMockTests(res || []);
       } catch (err) {
         console.error('Failed to load mock tests:', err);
@@ -40,7 +79,30 @@ export default function MockTestsPage() {
       }
     }
     loadTests();
-  }, []);
+  }, [selectedType, selectedCompany]);
+
+  const handleTabChange = (typeVal) => {
+    setSelectedType(typeVal);
+    const newParams = {};
+    if (typeVal !== 'all') newParams.type = typeVal;
+    if (selectedCompany) newParams.company = selectedCompany;
+    setSearchParams(newParams);
+  };
+
+  const handleCompanyChange = (compName) => {
+    setSelectedCompany(compName);
+    const newParams = {};
+    if (selectedType !== 'all') newParams.type = selectedType;
+    if (compName) newParams.company = compName;
+    setSearchParams(newParams);
+  };
+
+  const handleClearCompany = () => {
+    setSelectedCompany('');
+    const newParams = {};
+    if (selectedType !== 'all') newParams.type = selectedType;
+    setSearchParams(newParams);
+  };
 
   const handleStartTest = async (test) => {
     setIsStarting(true);
@@ -64,119 +126,212 @@ export default function MockTestsPage() {
     }
   };
 
-  const filteredTests = mockTests.filter(
-    (t) => selectedType === 'all' || t.type === selectedType
-  );
+  // Safe client-side fallback filtering
+  const filteredTests = mockTests.filter((t) => {
+    const matchesType =
+      selectedType === 'all' ||
+      t.type === selectedType ||
+      (selectedType === 'company_mock' && (t.type === 'company' || t.type === 'company_mock')) ||
+      (selectedType === 'topic_test' && (t.type === 'topic' || t.type === 'topic_test' || t.type === 'grand')) ||
+      (selectedType === 'diagnostic' && t.type === 'diagnostic');
 
-  if (loading) {
-    return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-10 bg-slate-200 dark:bg-slate-800 rounded-xl w-1/4" />
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-56 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-          ))}
-        </div>
-      </div>
-    );
-  }
+    const matchesCompany =
+      !selectedCompany ||
+      (t.company && t.company.toLowerCase() === selectedCompany.toLowerCase());
+
+    return matchesType && matchesCompany;
+  });
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {/* Header */}
-      <div>
-        <span className="text-[11px] font-bold tracking-wider uppercase text-teal-700 dark:text-teal-400">
-          EXAM SIMULATION
-        </span>
-        <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mt-1">
-          Full-Length Mock Tests
-        </h2>
-        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Standardized placement assessments with live timers and authoritative server evaluation
-        </p>
-      </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <span className="text-[11px] font-bold tracking-wider uppercase text-teal-700 dark:text-teal-400">
+            EXAM SIMULATION
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mt-1">
+            Full-Length Mock Tests
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Standardized placement assessments with live timers and authoritative server evaluation
+          </p>
+        </div>
 
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {[
-          { label: 'All Assessments', value: 'all' },
-          { label: 'Company Mocks', value: 'company_mock' },
-          { label: 'Topic Tests', value: 'topic_test' },
-          { label: 'Diagnostic Assessments', value: 'diagnostic' }
-        ].map((tab) => (
-          <button
-            key={tab.value}
-            onClick={() => setSelectedType(tab.value)}
-            className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-              selectedType === tab.value
-                ? 'bg-teal-600 text-white shadow-xs'
-                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200/60 dark:border-slate-700'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Test Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredTests.map((test) => (
-          <div
-            key={test._id}
-            className="bg-white dark:bg-slate-800/90 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all flex flex-col justify-between group"
-          >
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <Badge variant={test.company === 'General' ? 'neutral' : 'teal'}>
-                  {test.company}
-                </Badge>
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
-                  <Clock className="w-3.5 h-3.5 text-teal-600" />
-                  <span>{test.durationMinutes} mins</span>
-                </div>
-              </div>
-
-              <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
-                {test.title}
-              </h3>
-
-              <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
-                <div className="flex justify-between text-slate-500">
-                  <span>Questions:</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {test.totalQuestions} Questions
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>Total Marks:</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {test.totalMarks} Marks
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>Passing Cutoff:</span>
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                    {test.passingMarks} Marks (60%)
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400">
-                Exam format verified
-              </span>
+        {selectedCompany && (
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <span className="text-xs font-medium text-slate-500">Filtered for:</span>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 text-xs font-bold">
+              <Building2 className="w-3.5 h-3.5 text-teal-600" />
+              <span>{selectedCompany}</span>
               <button
-                onClick={() => setSelectedTest(test)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                onClick={handleClearCompany}
+                className="hover:text-rose-500 transition-colors ml-1 cursor-pointer"
+                title="Clear company filter"
               >
-                <span>Instructions</span>
-                <Play className="w-3 h-3 fill-white" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
-        ))}
+        )}
       </div>
+
+      {/* Filter Controls Bar */}
+      <div className="space-y-4">
+        {/* Filter Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+            {[
+              { label: 'All Assessments', value: 'all' },
+              { label: 'Company Mocks', value: 'company_mock' },
+              { label: 'Topic Tests', value: 'topic_test' },
+              { label: 'Diagnostic Assessments', value: 'diagnostic' }
+            ].map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => handleTabChange(tab.value)}
+                className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                  selectedType === tab.value
+                    ? 'bg-teal-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200/60 dark:border-slate-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Company Filter Dropdown (visible on All Assessments & Company Mocks) */}
+          {(selectedType === 'all' || selectedType === 'company_mock') && companies.length > 0 && (
+            <div className="flex items-center gap-2 shrink-0">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-xs text-slate-500 hidden sm:inline">Company:</span>
+              <select
+                value={selectedCompany}
+                onChange={(e) => handleCompanyChange(e.target.value)}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 focus:outline-hidden focus:border-teal-500 cursor-pointer"
+              >
+                <option value="">All Companies</option>
+                {companies.map((c) => (
+                  <option key={c._id || c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Loading Skeleton */}
+      {loading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-56 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+          ))}
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!loading && filteredTests.length === 0 && (
+        <div className="bg-white dark:bg-slate-800/90 rounded-3xl p-12 text-center border border-slate-100 dark:border-slate-800 card-shadow space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-teal-50 dark:bg-teal-950 text-teal-600 flex items-center justify-center mx-auto">
+            <Timer className="w-7 h-7" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              No assessments found
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto mt-1">
+              {selectedCompany
+                ? `No full mock tests currently configured for ${selectedCompany}. You can reset the filter or start a 10-question practice drill.`
+                : 'No assessments available under this tab.'}
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            {selectedCompany && (
+              <button
+                onClick={handleClearCompany}
+                className="px-4 py-2 rounded-full border border-slate-200 dark:border-slate-700 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
+              >
+                Show All Companies
+              </button>
+            )}
+            <button
+              onClick={() => handleTabChange('all')}
+              className="px-5 py-2 rounded-full bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold cursor-pointer"
+            >
+              View All Assessments
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Test Cards Grid */}
+      {!loading && filteredTests.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredTests.map((test) => (
+            <div
+              key={test._id}
+              className="bg-white dark:bg-slate-800/90 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all flex flex-col justify-between group"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <Badge variant={test.company === 'General' || !test.company ? 'neutral' : 'teal'}>
+                    {test.company || 'General'}
+                  </Badge>
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+                    <Clock className="w-3.5 h-3.5 text-teal-600" />
+                    <span>{test.durationMinutes} mins</span>
+                  </div>
+                </div>
+
+                <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
+                  {test.title}
+                </h3>
+
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2">
+                  {test.description || 'Verified campus placement assessment simulation.'}
+                </p>
+
+                <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Questions:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      {test.totalQuestions} Questions
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Total Marks:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      {test.totalMarks} Marks
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Passing Cutoff:</span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                      {test.passingMarks} Marks ({test.passingScore || 60}%)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  Exam format verified
+                </span>
+                <button
+                  onClick={() => setSelectedTest(test)}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                >
+                  <span>Instructions</span>
+                  <Play className="w-3 h-3 fill-white" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Instructions & Confirmation Dialog */}
       {selectedTest && (
@@ -193,7 +348,7 @@ export default function MockTestsPage() {
               </div>
               <button
                 onClick={() => setSelectedTest(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>

@@ -4,7 +4,7 @@
 
 import { mockStore } from './mockStore';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
 
 class ApiClient {
   constructor() {
@@ -35,13 +35,28 @@ class ApiClient {
     if (!isMultipart) {
       requestHeaders['Content-Type'] = 'application/json';
     }
+
+    // Never attach synthetic mock tokens to real backend HTTP requests.
+    // Route intentional mock sessions directly to the offline fallback store,
+    // except for auth login and register requests which should authenticate against the live backend.
+    if (token && token.startsWith('mock_') && !endpoint.startsWith('/auth/login') && !endpoint.startsWith('/auth/register')) {
+      return this.handleOfflineFallback(endpoint, method, data);
+    }
+
     if (token) {
       requestHeaders['Authorization'] = `Bearer ${token}`;
     }
 
+    const isImportOperation = isMultipart || endpoint.includes('/import');
+    const timeoutDuration = isImportOperation ? 60000 : 20000;
+
+    let timedOut = false;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4s timeout before local fallback
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutDuration);
 
       const fetchOptions = {
         method,
@@ -68,12 +83,26 @@ class ApiClient {
 
       return json;
     } catch (err) {
-      // If server responded with a deliberate 4xx or 5xx, propagate it
-      if (err.status && err.status >= 400 && err.status < 500) {
+      // If server responded with any deliberate status code (4xx or 5xx), do not mask it
+      if (err.status) {
         throw err;
       }
 
-      // If backend network is unreachable, fallback to mockStore seamlessly
+      if (timedOut) {
+        const timeoutErr = new Error(`Request to ${endpoint} timed out after ${timeoutDuration / 1000}s. Please check your network and try again.`);
+        timeoutErr.name = 'TimeoutError';
+        throw timeoutErr;
+      }
+
+      // If user is authenticated in a live session (real backend JWT), do not silently route to mockStore!
+      // This prevents split-brain states where preview creates an in-memory batch and publish fails on MongoDB.
+      if (token && !token.startsWith('mock_')) {
+        console.error(`[ReadyUp API] Network request failed for authenticated endpoint ${endpoint}:`, err.message);
+        throw err;
+      }
+
+      console.warn(`[ReadyUp API] Live backend network unreachable at ${url}. Using offline development fallback.`);
+      // If backend network is strictly unreachable or offline, fallback to mockStore for development continuity
       return this.handleOfflineFallback(endpoint, method, data);
     }
   }
@@ -211,11 +240,13 @@ class ApiClient {
       return { success: true, message: 'Coordinator dashboard retrieved', data: mockStore.getCoordinatorDashboard() };
     }
     if (endpoint === '/coordinator/import/preview' && method === 'POST') {
-      const preview = mockStore.previewSpreadsheetImport({ file: data?.get?.('file') });
+      const file = data?.get?.('file') || data?.file;
+      const preview = await mockStore.previewSpreadsheetImport({ file });
       return { success: true, message: `Spreadsheet parsed successfully. ${preview.validRowsCount} valid rows ready for review.`, data: preview };
     }
     if (endpoint === '/coordinator/import/confirm' && method === 'POST') {
-      const confirmed = mockStore.confirmSpreadsheetImport(data.importBatchId);
+      const batchId = data?.importBatchId || data?.batchId;
+      const confirmed = mockStore.confirmSpreadsheetImport(batchId);
       return { success: true, message: 'Import confirmed and published successfully into question bank', data: confirmed };
     }
     if (endpoint === '/coordinator/import/history' && method === 'GET') {
