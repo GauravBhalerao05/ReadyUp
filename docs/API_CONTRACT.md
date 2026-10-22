@@ -1,10 +1,10 @@
 # ReadyUp — Complete API Contract & Frontend Integration Specification
 
-> **Version:** 1.0.0  
-> **Status:** Implemented & Verified on `Backend` branch  
-> **Target Audience:** ReadyUp Frontend Development Team  
-> **Base URL:** `http://localhost:5001/api/v1`  
-> **Default Port:** `5001`  
+> **Version:** 1.0.0
+> **Status:** Implemented & Verified on `Backend` branch
+> **Target Audience:** ReadyUp Frontend Development Team
+> **Base URL:** `http://localhost:5000/api/v1` (configurable via `VITE_API_BASE_URL` on frontend and `PORT` on backend)
+> **Default Port:** `5000`
 
 ---
 
