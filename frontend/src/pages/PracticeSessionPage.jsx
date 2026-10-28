@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -7,11 +7,13 @@ import {
   CheckCircle2,
   Clock,
   RotateCcw,
-  Send
+  Send,
+  ShieldAlert
 } from 'lucide-react';
 import { testService } from '../services/testService';
 import { bookmarkService } from '../services/bookmarkService';
 import { useToast } from '../context/ToastContext';
+import { useActiveTest } from '../context/ActiveTestContext';
 import Badge from '../components/common/Badge';
 
 export default function PracticeSessionPage() {
@@ -19,6 +21,7 @@ export default function PracticeSessionPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { addToast } = useToast();
+  const { registerActiveTest, unregisterActiveTest } = useActiveTest();
 
   const [session, setSession] = useState(location.state?.session || null);
   const [loading, setLoading] = useState(!session);
@@ -27,6 +30,27 @@ export default function PracticeSessionPage() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [hasLoadedSavedState, setHasLoadedSavedState] = useState(false);
+  const isSubmittedRef = useRef(false);
+  const submitAndLeaveRef = useRef();
+
+  const storageKey = `readyup_practice_state_${attemptId || session?.attemptId || 'active'}`;
+
+  // Register active practice test with context to intercept sidebar navigation
+  useEffect(() => {
+    if (loading || !session || isSubmittedRef.current) return;
+
+    registerActiveTest({
+      attemptId: session.attemptId || attemptId,
+      testType: 'practice',
+      submitAndLeave: (dest) => submitAndLeaveRef.current(dest)
+    });
+
+    return () => {
+      unregisterActiveTest(session.attemptId || attemptId);
+    };
+  }, [loading, session, attemptId, registerActiveTest, unregisterActiveTest]);
 
   // Fallback initialize if accessed directly
   useEffect(() => {
@@ -41,18 +65,106 @@ export default function PracticeSessionPage() {
         } finally {
           setLoading(false);
         }
+      } else {
+        setLoading(false);
       }
     }
     loadFallback();
   }, [attemptId, session, navigate, addToast]);
 
-  // Elapsed timer
+  // Restore persisted progress on reload / revisit
   useEffect(() => {
+    if (loading || !session || hasLoadedSavedState) return;
+
+    try {
+      const savedRaw = sessionStorage.getItem(storageKey);
+      if (savedRaw) {
+        const saved = JSON.parse(savedRaw);
+        if (saved && (saved.attemptId === (session.attemptId || attemptId) || !saved.attemptId)) {
+          if (saved.answers && typeof saved.answers === 'object') {
+            setAnswers(saved.answers);
+          }
+          if (typeof saved.currentIndex === 'number' && saved.currentIndex >= 0) {
+            setCurrentIndex(saved.currentIndex);
+          }
+          if (typeof saved.elapsedSeconds === 'number' && saved.elapsedSeconds >= 0) {
+            setElapsedSeconds(saved.elapsedSeconds);
+          }
+          if (saved.isPaused) {
+            setIsPaused(true);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not restore saved practice state:', e);
+    } finally {
+      setHasLoadedSavedState(true);
+    }
+  }, [loading, session, hasLoadedSavedState, storageKey, attemptId]);
+
+  // Persist practice state to sessionStorage whenever answers, position, or pause state change
+  useEffect(() => {
+    if (loading || !session || isSubmittedRef.current || !hasLoadedSavedState) return;
+
+    try {
+      const stateToCache = {
+        attemptId: session.attemptId || attemptId,
+        answers,
+        currentIndex,
+        elapsedSeconds,
+        isPaused
+      };
+      sessionStorage.setItem(storageKey, JSON.stringify(stateToCache));
+    } catch (_) { }
+  }, [answers, currentIndex, elapsedSeconds, isPaused, loading, session, hasLoadedSavedState, storageKey, attemptId]);
+
+  // Test Integrity: Tab visibility change & beforeunload protection
+  useEffect(() => {
+    if (loading || !session) return;
+
+    const handleVisibilityChange = () => {
+      if (isSubmittedRef.current) return;
+      if (document.visibilityState === 'hidden') {
+        setIsPaused(true);
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      if (isSubmittedRef.current) return;
+      try {
+        const stateToCache = {
+          attemptId: session.attemptId || attemptId,
+          answers,
+          currentIndex,
+          elapsedSeconds,
+          isPaused: true
+        };
+        sessionStorage.setItem(storageKey, JSON.stringify(stateToCache));
+      } catch (_) { }
+
+      e.preventDefault();
+      e.returnValue = 'Your practice test is actively in progress. Leaving or refreshing will pause the test.';
+      return e.returnValue;
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [loading, session, answers, currentIndex, elapsedSeconds, storageKey, attemptId]);
+
+  // Elapsed timer (pauses when isPaused is true)
+  useEffect(() => {
+    if (loading || isPaused) return;
+
     const timer = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [loading, isPaused]);
 
   const formatTime = (secs) => {
     const m = Math.floor(secs / 60);
@@ -117,7 +229,14 @@ export default function PracticeSessionPage() {
     }
   };
 
-  const handleFinalSubmit = async () => {
+  submitAndLeaveRef.current = async (destination) => {
+    return await handleFinalSubmit({ redirectOverride: destination });
+  };
+
+  const handleFinalSubmit = async (options = {}) => {
+    const { redirectOverride } = options;
+    if (isSubmittedRef.current) return false;
+    isSubmittedRef.current = true;
     setIsSubmitting(true);
     try {
       const formattedAnswers = questions.map((q) => {
@@ -131,49 +250,73 @@ export default function PracticeSessionPage() {
       });
 
       const result = await testService.submitAttempt(session.attemptId, formattedAnswers);
+      try {
+        sessionStorage.removeItem(storageKey);
+      } catch (_) { }
       addToast({
         title: 'Practice Submitted!',
         message: `Score: ${result.score}/${result.totalQuestions || result.totalMarks} (${result.percentage || result.accuracy}%)`,
         type: result.passed ? 'success' : 'warning'
       });
       setShowSubmitModal(false);
+      unregisterActiveTest(session.attemptId);
+      if (redirectOverride) {
+        return true;
+      }
       navigate(`/tests/review/${session.attemptId}`, { state: { result } });
+      return true;
     } catch (err) {
       const errData = err.data?.data || err.data;
       const isExpired = errData?.status === 'expired' || err.message?.toLowerCase().includes('expired');
       const isConflict = err.status === 409;
 
       if (isExpired) {
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch (_) { }
         addToast({
           title: 'Session Expired',
           message: 'Practice duration elapsed. Loading session review...',
           type: 'warning'
         });
         setShowSubmitModal(false);
+        unregisterActiveTest(session.attemptId);
+        if (redirectOverride) {
+          return true;
+        }
         navigate(`/tests/review/${session.attemptId}`, {
           state: { result: errData || { status: 'expired', score: 0, result: 'Failed' } }
         });
-        return;
+        return true;
       }
 
       if (isConflict) {
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch (_) { }
         addToast({
           title: 'Already Submitted',
           message: 'This practice session was already submitted. Loading review...',
           type: 'info'
         });
         setShowSubmitModal(false);
+        unregisterActiveTest(session.attemptId);
+        if (redirectOverride) {
+          return true;
+        }
         navigate(`/tests/review/${session.attemptId}`, {
           state: { result: errData }
         });
-        return;
+        return true;
       }
 
+      isSubmittedRef.current = false;
       addToast({
         title: 'Submission Error',
         message: err.message || 'Please retry',
         type: 'error'
       });
+      return false;
     } finally {
       setIsSubmitting(false);
     }
@@ -244,18 +387,16 @@ export default function PracticeSessionPage() {
                     <div
                       key={opt.optionId}
                       onClick={() => handleSelectOption(opt.optionId)}
-                      className={`p-4 rounded-2xl border text-sm font-medium transition-all cursor-pointer flex items-center gap-3.5 ${
-                        isSelected
+                      className={`p-4 rounded-2xl border text-sm font-medium transition-all cursor-pointer flex items-center gap-3.5 ${isSelected
                           ? 'border-teal-500 bg-teal-50/70 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 shadow-xs'
                           : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 bg-slate-50/50 dark:bg-slate-900/40 text-slate-700 dark:text-slate-200'
-                      }`}
+                        }`}
                     >
                       <div
-                        className={`w-7 h-7 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${
-                          isSelected
+                        className={`w-7 h-7 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${isSelected
                             ? 'bg-teal-600 text-white'
                             : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400'
-                        }`}
+                          }`}
                       >
                         {opt.optionId}
                       </div>
@@ -272,11 +413,10 @@ export default function PracticeSessionPage() {
                 <button
                   type="button"
                   onClick={handleToggleMarkReview}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                    currentAnswer.markedForReview
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${currentAnswer.markedForReview
                       ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                       : 'bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                  }`}
+                    }`}
                 >
                   <Bookmark className="w-3.5 h-3.5" />
                   <span>{currentAnswer.markedForReview ? 'Marked for Review' : 'Mark Review'}</span>
@@ -305,15 +445,25 @@ export default function PracticeSessionPage() {
                   <span>Previous</span>
                 </button>
 
-                <button
-                  type="button"
-                  disabled={currentIndex === questions.length - 1}
-                  onClick={() => setCurrentIndex((prev) => Math.min(questions.length - 1, prev + 1))}
-                  className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                >
-                  <span>Next</span>
-                  <ChevronRight className="w-4 h-4" />
-                </button>
+                {currentIndex < questions.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentIndex((prev) => Math.min(questions.length - 1, prev + 1))}
+                    className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowSubmitModal(true)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  >
+                    <span>Submit Test</span>
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -345,9 +495,8 @@ export default function PracticeSessionPage() {
                   <button
                     key={q.questionId}
                     onClick={() => setCurrentIndex(idx)}
-                    className={`h-9 rounded-xl text-xs font-semibold transition-all cursor-pointer relative flex items-center justify-center ${pillColor} ${
-                      isCurrent ? 'ring-2 ring-teal-500 ring-offset-2 dark:ring-offset-slate-900 scale-105' : ''
-                    }`}
+                    className={`h-9 rounded-xl text-xs font-semibold transition-all cursor-pointer relative flex items-center justify-center ${pillColor} ${isCurrent ? 'ring-2 ring-teal-500 ring-offset-2 dark:ring-offset-slate-900 scale-105' : ''
+                      }`}
                   >
                     <span>{idx + 1}</span>
                     {isMarked && (
@@ -406,6 +555,50 @@ export default function PracticeSessionPage() {
                 {isSubmitting ? 'Evaluating...' : 'Confirm Submit'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Test Integrity - Test Paused Modal */}
+      {isPaused && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-2xl max-w-md w-full p-6 sm:p-7 text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4 border border-amber-200 dark:border-amber-900/50">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+              Practice Session Paused
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mb-5 leading-relaxed">
+              Your practice drill has been paused because you left the active test window. Your answers, current question, and elapsed time have been preserved.
+            </p>
+
+            <div className="bg-slate-50 dark:bg-slate-900/80 rounded-2xl p-4 mb-6 border border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-3 text-left">
+              <div>
+                <span className="text-[11px] text-slate-400 block font-medium">Question Position</span>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  {currentIndex + 1} of {questions.length}
+                </span>
+              </div>
+              <div>
+                <span className="text-[11px] text-slate-400 block font-medium">Elapsed Time</span>
+                <span className="text-sm font-mono font-bold text-teal-600 dark:text-teal-400">
+                  {formatTime(elapsedSeconds)}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsPaused(false)}
+              className="w-full py-3 px-6 rounded-2xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm shadow-md shadow-teal-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <span>Resume Practice</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <p className="mt-3 text-[11px] text-slate-400">
+              Please stay within this window until your practice session is submitted.
+            </p>
           </div>
         </div>
       )}

@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Building2,
   Filter,
+  Calendar,
   X
 } from 'lucide-react';
 import { testService } from '../services/testService';
@@ -71,7 +72,17 @@ export default function MockTestsPage() {
           params.company = selectedCompany;
         }
         const res = await testService.getMockTests(params);
-        setMockTests(res || []);
+        // Phase 6 duplicate prevention: Ensure strictly one card per unique test ID
+        const unique = [];
+        const seen = new Set();
+        (res || []).forEach((t) => {
+          const id = String(t._id || t.id);
+          if (id && !seen.has(id)) {
+            seen.add(id);
+            unique.push(t);
+          }
+        });
+        setMockTests(unique);
       } catch (err) {
         console.error('Failed to load mock tests:', err);
       } finally {
@@ -80,6 +91,17 @@ export default function MockTestsPage() {
     }
     loadTests();
   }, [selectedType, selectedCompany]);
+
+  // If testId is provided in URL (e.g. from notification click), open test details modal
+  useEffect(() => {
+    const testIdParam = searchParams.get('testId');
+    if (testIdParam && mockTests.length > 0) {
+      const target = mockTests.find((t) => String(t._id) === String(testIdParam));
+      if (target) {
+        setSelectedTest(target);
+      }
+    }
+  }, [searchParams, mockTests]);
 
   const handleTabChange = (typeVal) => {
     setSelectedType(typeVal);
@@ -104,7 +126,36 @@ export default function MockTestsPage() {
     setSearchParams(newParams);
   };
 
+  const getTestSchedule = (t) => {
+    const start = t.startDate || t.startTime || null;
+    const end = t.endDate || t.deadline || null;
+    const now = new Date();
+    const isUpcoming = t.scheduleStatus === 'upcoming' || (start && now < new Date(start));
+    const isClosed = t.scheduleStatus === 'closed' || (end && now > new Date(end));
+    return { start, end, isUpcoming, isClosed };
+  };
+
   const handleStartTest = async (test) => {
+    const { start, end, isUpcoming, isClosed } = getTestSchedule(test);
+
+    if (isUpcoming) {
+      addToast({
+        title: 'Assessment Not Open Yet',
+        message: `This assessment opens on ${start ? new Date(start).toLocaleString() : 'a scheduled date'}.`,
+        type: 'warning'
+      });
+      return;
+    }
+
+    if (isClosed) {
+      addToast({
+        title: 'Assessment Window Closed',
+        message: 'The deadline for this assessment has already passed.',
+        type: 'error'
+      });
+      return;
+    }
+
     setIsStarting(true);
     try {
       const session = await testService.startMockTest(test._id);
@@ -190,11 +241,10 @@ export default function MockTestsPage() {
               <button
                 key={tab.value}
                 onClick={() => handleTabChange(tab.value)}
-                className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                  selectedType === tab.value
+                className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${selectedType === tab.value
                     ? 'bg-teal-600 text-white shadow-xs'
                     : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200/60 dark:border-slate-700'
-                }`}
+                  }`}
               >
                 {tab.label}
               </button>
@@ -270,66 +320,154 @@ export default function MockTestsPage() {
       {/* Test Cards Grid */}
       {!loading && filteredTests.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredTests.map((test) => (
-            <div
-              key={test._id}
-              className="bg-white dark:bg-slate-800/90 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all flex flex-col justify-between group"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <Badge variant={test.company === 'General' || !test.company ? 'neutral' : 'teal'}>
-                    {test.company || 'General'}
-                  </Badge>
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
-                    <Clock className="w-3.5 h-3.5 text-teal-600" />
-                    <span>{test.durationMinutes} mins</span>
+          {filteredTests.map((test) => {
+            const isCompleted = test.userAttempt?.status === 'completed';
+            const isInProgress = test.userAttempt?.status === 'in-progress';
+            const { start, end, isUpcoming, isClosed } = getTestSchedule(test);
+
+            return (
+              <div
+                key={test._id}
+                className="bg-white dark:bg-slate-800/90 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 card-shadow hover:card-shadow-hover transition-all flex flex-col justify-between group"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <Badge variant={test.company === 'General' || !test.company ? 'neutral' : 'teal'}>
+                      {test.company || 'General'}
+                    </Badge>
+                    <div className="flex items-center gap-2">
+                      {isCompleted ? (
+                        <Badge variant="emerald">Completed</Badge>
+                      ) : isInProgress ? (
+                        <Badge variant="amber">In Progress</Badge>
+                      ) : isUpcoming ? (
+                        <Badge variant="purple">Upcoming</Badge>
+                      ) : isClosed ? (
+                        <Badge variant="danger">Closed</Badge>
+                      ) : (
+                        <Badge variant="teal">Live</Badge>
+                      )}
+                      <div className="flex items-center gap-1 text-xs text-slate-400 font-mono">
+                        <Clock className="w-3.5 h-3.5 text-teal-600" />
+                        <span>{test.durationMinutes} mins</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
+                    {test.title}
+                  </h3>
+
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2">
+                    {test.description || 'Verified campus placement assessment simulation.'}
+                  </p>
+
+                  {/* Schedule Details if test has start or end dates */}
+                  {(start || end) && (
+                    <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 text-[11px] space-y-1">
+                      {start && (
+                        <div className="flex items-center justify-between text-slate-500">
+                          <span className="flex items-center gap-1 font-medium">
+                            <Calendar className="w-3 h-3 text-teal-600" /> Starts:
+                          </span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">
+                            {new Date(start).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      )}
+                      {end && (
+                        <div className="flex items-center justify-between text-slate-500">
+                          <span className="flex items-center gap-1 font-medium">
+                            <Clock className="w-3 h-3 text-rose-500" /> Deadline:
+                          </span>
+                          <span className={`font-semibold ${isClosed ? 'text-rose-600 dark:text-rose-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                            {new Date(end).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-500">
+                      <span>Questions:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {test.totalQuestions} Questions
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Total Marks:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {test.totalMarks} Marks
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Passing Cutoff:</span>
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                        {test.passingMarks} Marks ({test.passingScore || 60}%)
+                      </span>
+                    </div>
+                    {isCompleted && test.userAttempt && (
+                      <div className="flex justify-between text-slate-500 pt-1.5 border-t border-slate-200 dark:border-slate-700">
+                        <span className="font-medium text-emerald-700 dark:text-emerald-400">Your Score:</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                          {test.userAttempt.score} / {test.totalMarks} ({Math.round(((test.userAttempt.score || 0) / (test.totalMarks || 1)) * 100)}%)
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-teal-600 transition-colors">
-                  {test.title}
-                </h3>
+                <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400">
+                    {isCompleted ? 'Attempt submitted' : isUpcoming ? 'Scheduled test' : isClosed ? 'Window closed' : 'Exam format verified'}
+                  </span>
 
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2">
-                  {test.description || 'Verified campus placement assessment simulation.'}
-                </p>
-
-                <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
-                  <div className="flex justify-between text-slate-500">
-                    <span>Questions:</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {test.totalQuestions} Questions
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Total Marks:</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {test.totalMarks} Marks
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Passing Cutoff:</span>
-                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                      {test.passingMarks} Marks ({test.passingScore || 60}%)
-                    </span>
-                  </div>
+                  {isCompleted ? (
+                    <button
+                      onClick={() => navigate(`/tests/review/${test.userAttempt.attemptId}`)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-bold text-xs border border-emerald-200 dark:border-emerald-800 transition-all cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Review Result</span>
+                    </button>
+                  ) : isInProgress ? (
+                    <button
+                      onClick={() => navigate(`/tests/take/${test.userAttempt.attemptId}`)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                    >
+                      <span>Resume Test</span>
+                      <Play className="w-3 h-3 fill-white" />
+                    </button>
+                  ) : isUpcoming ? (
+                    <button
+                      disabled
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-400 text-xs font-semibold cursor-not-allowed border border-slate-200 dark:border-slate-700"
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>Opens {start ? new Date(start).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'Soon'}</span>
+                    </button>
+                  ) : isClosed ? (
+                    <button
+                      disabled
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-400 text-xs font-semibold cursor-not-allowed border border-slate-200 dark:border-slate-700"
+                    >
+                      <AlertTriangle className="w-3 h-3 text-rose-400" />
+                      <span>Closed</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setSelectedTest(test)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                    >
+                      <span>Instructions</span>
+                      <Play className="w-3 h-3 fill-white" />
+                    </button>
+                  )}
                 </div>
               </div>
-
-              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                <span className="text-[11px] text-slate-400">
-                  Exam format verified
-                </span>
-                <button
-                  onClick={() => setSelectedTest(test)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
-                >
-                  <span>Instructions</span>
-                  <Play className="w-3 h-3 fill-white" />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -370,6 +508,28 @@ export default function MockTestsPage() {
                 </div>
               </div>
 
+              {/* Schedule timing window in modal if present */}
+              {(selectedTest.startDate || selectedTest.startTime || selectedTest.endDate || selectedTest.deadline) && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-700 text-xs space-y-1">
+                  {(selectedTest.startDate || selectedTest.startTime) && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Available From:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {new Date(selectedTest.startDate || selectedTest.startTime).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  {(selectedTest.endDate || selectedTest.deadline) && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Submission Deadline:</span>
+                      <span className="font-semibold text-rose-600 dark:text-rose-400">
+                        {new Date(selectedTest.endDate || selectedTest.deadline).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block mb-2">
                   Important Guidelines:
@@ -399,9 +559,15 @@ export default function MockTestsPage() {
               </button>
               <button
                 type="button"
-                disabled={isStarting}
+                disabled={
+                  isStarting ||
+                  selectedTest.scheduleStatus === 'upcoming' ||
+                  ((selectedTest.startDate || selectedTest.startTime) && new Date() < new Date(selectedTest.startDate || selectedTest.startTime)) ||
+                  selectedTest.scheduleStatus === 'closed' ||
+                  ((selectedTest.endDate || selectedTest.deadline) && new Date() > new Date(selectedTest.endDate || selectedTest.deadline))
+                }
                 onClick={() => handleStartTest(selectedTest)}
-                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-sm transition-all cursor-pointer"
+                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-sm transition-all cursor-pointer"
               >
                 <span>{isStarting ? 'Starting Timer...' : 'Start Mock Test Now'}</span>
                 <Play className="w-3.5 h-3.5 fill-white" />

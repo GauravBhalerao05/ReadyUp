@@ -28,6 +28,13 @@ export const testService = {
     return res.data;
   },
 
+  async getAttempt(attemptId) {
+    const res = await apiClient.request(`/tests/attempts/${attemptId}`, {
+      method: 'GET'
+    });
+    return res.data;
+  },
+
   async submitAttempt(attemptId, answers) {
     const res = await apiClient.request(`/tests/attempts/${attemptId}/submit`, {
       method: 'POST',
@@ -60,6 +67,25 @@ export const testService = {
   async removeIncorrectQuestion(questionId) {
     const res = await apiClient.request(`/tests/incorrect/${encodeURIComponent(questionId)}`, {
       method: 'DELETE'
+    });
+    return res.data;
+  },
+
+  async clearAllRevisionItems() {
+    const res = await apiClient.request('/tests/revision/clear-all', {
+      method: 'POST'
+    });
+    return res.data;
+  },
+
+  async startRevisionDrill(questionIds = []) {
+    const res = await apiClient.request('/tests/practice/start', {
+      method: 'POST',
+      data: {
+        isRevision: true,
+        questionIds,
+        count: questionIds.length || 10
+      }
     });
     return res.data;
   }

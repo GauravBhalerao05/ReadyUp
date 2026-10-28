@@ -124,13 +124,23 @@ class MockStore {
   }
 
   // --- Auth & Users ---
-  login(email, password) {
+  login(email, password, requiredRole) {
     const user = this.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
     if (!user) {
       throw { status: 401, message: 'Invalid email or password' };
     }
     if (user.isActive === false) {
       throw { status: 403, message: 'This account has been deactivated. Please contact an administrator.' };
+    }
+    if (requiredRole && typeof requiredRole === 'string' && requiredRole.trim()) {
+      const expected = requiredRole.trim().toLowerCase();
+      if (user.role.toLowerCase() !== expected) {
+        throw {
+          status: 403,
+          code: 'ROLE_MISMATCH',
+          message: `Access denied. Your account is registered as a ${user.role}. Please sign in via the ${user.role} login portal.`
+        };
+      }
     }
     const token = 'mock_jwt_token_' + user.role + '_' + Date.now();
     user.lastLoginAt = new Date().toISOString();
@@ -169,8 +179,7 @@ class MockStore {
     this.users.unshift(newUser);
     this.saveState();
 
-    const token = 'mock_jwt_token_' + newUser.role + '_' + Date.now();
-    return { user: newUser, token };
+    return { user: newUser };
   }
 
   updateProfile(userId, updateData) {
@@ -187,6 +196,29 @@ class MockStore {
 
     this.saveState();
     return user;
+  }
+
+  forgotPassword(email, role) {
+    const rawToken = 'mock_reset_' + Date.now();
+    return {
+      success: true,
+      emailConfigured: false,
+      message: 'Email delivery configuration is not configured on this server (SMTP settings missing). For verification and testing, your reset token has been generated below.',
+      data: {
+        resetToken: rawToken,
+        email,
+        role: role || 'student',
+        expiresInMinutes: 15
+      }
+    };
+  }
+
+  resetPassword(token, password) {
+    return {
+      success: true,
+      message: 'Password has been successfully reset. You can now sign in with your new password.',
+      data: null
+    };
   }
 
   // --- Categories & Questions ---
@@ -290,10 +322,27 @@ class MockStore {
 
   // --- Mock Tests & Practice Sessions ---
   getMockTests({ company, type } = {}) {
-    let filtered = [...this.mockTests];
-    if (company) filtered = filtered.filter((t) => t.company.toLowerCase() === company.toLowerCase());
+    let filtered = [...this.mockTests].filter(
+      (t) => t.isActive !== false && t.status !== 'draft' && t.status !== 'archived'
+    );
+    if (company) filtered = filtered.filter((t) => (t.company || '').toLowerCase() === company.toLowerCase());
     if (type) filtered = filtered.filter((t) => t.type === type);
-    return filtered;
+
+    const now = new Date();
+    return filtered.map((t) => {
+      let scheduleStatus = 'live';
+      if (t.startDate && now < new Date(t.startDate)) {
+        scheduleStatus = 'upcoming';
+      } else if (t.endDate && now > new Date(t.endDate)) {
+        scheduleStatus = 'closed';
+      }
+      return {
+        ...t,
+        scheduleStatus,
+        totalMarks: t.totalMarks || t.totalQuestions || 15,
+        passingMarks: Math.round(((t.totalMarks || t.totalQuestions || 15) * (t.passingScore || 60)) / 100)
+      };
+    });
   }
 
   getMockTestById(id) {
@@ -302,18 +351,23 @@ class MockStore {
     return test;
   }
 
-  startPracticeSession({ category, topic, difficulty, company, count = 10 } = {}) {
+  startPracticeSession({ category, topic, difficulty, company, count = 10, isRevision, questionIds } = {}) {
     let available = [...this.questions];
-    if (category) available = available.filter((q) => q.category.toLowerCase() === category.toLowerCase());
-    if (topic) available = available.filter((q) => q.topic.toLowerCase() === topic.toLowerCase());
-    if (difficulty) available = available.filter((q) => q.difficulty.toLowerCase() === difficulty.toLowerCase());
-    if (company) available = available.filter((q) => q.companies && q.companies.some((c) => c.toLowerCase() === company.toLowerCase()));
+    if (Array.isArray(questionIds) && questionIds.length > 0) {
+      const qIdSet = new Set(questionIds.map((id) => String(id).toUpperCase()));
+      available = this.questions.filter((q) => qIdSet.has(q.questionId?.toUpperCase()) || qIdSet.has(q._id));
+    } else {
+      if (category) available = available.filter((q) => q.category.toLowerCase() === category.toLowerCase());
+      if (topic) available = available.filter((q) => q.topic.toLowerCase() === topic.toLowerCase());
+      if (difficulty) available = available.filter((q) => q.difficulty.toLowerCase() === difficulty.toLowerCase());
+      if (company) available = available.filter((q) => q.companies && q.companies.some((c) => c.toLowerCase() === company.toLowerCase()));
+    }
 
     if (available.length === 0) {
       available = [...this.questions]; // fallback to all available
     }
 
-    const selected = available.slice(0, count);
+    const selected = available.slice(0, count || 10);
     const attemptId = 'att_' + Date.now();
 
     // Strip answers from questions payload per API spec
@@ -329,7 +383,7 @@ class MockStore {
 
     const session = {
       attemptId,
-      title: `Practice: ${topic || category || 'Comprehensive Drill'}`,
+      title: isRevision ? 'Revision Practice Drill' : `Practice: ${topic || category || 'Comprehensive Drill'}`,
       type: 'practice',
       totalQuestions: strippedQuestions.length,
       startedAt: new Date().toISOString(),
@@ -521,6 +575,30 @@ class MockStore {
     return this.attempts[0]?.reviewData || null;
   }
 
+  getAttemptSession(attemptId) {
+    const attempt = this.attempts.find((a) => a.id === attemptId);
+    if (attempt) {
+      return {
+        attemptId: attempt.id,
+        mockTestId: attempt.testId,
+        title: attempt.title,
+        durationMinutes: attempt.durationMinutes || 45,
+        totalQuestions: attempt.totalQuestions || (attempt.questions?.length || 15),
+        questions: (attempt.questions || this.questions.slice(0, 15)).map((q) => ({
+          _id: q._id || q.id,
+          questionId: q.questionId,
+          questionText: q.questionText,
+          options: q.options,
+          category: q.category,
+          topic: q.topic,
+          difficulty: q.difficulty,
+        })),
+        startTime: attempt.startTime || new Date().toISOString(),
+      };
+    }
+    return null;
+  }
+
   getTestHistory() {
     return this.attempts;
   }
@@ -538,12 +616,14 @@ class MockStore {
       }
     });
 
+    const dismissed = new Set(this.dismissedIncorrectIds || []);
+
     // Provide default incorrects if none yet
     if (incorrectIds.size === 0) {
-      return [this.questions[1], this.questions[2]];
+      return [this.questions[1], this.questions[2]].filter((q) => !dismissed.has(q.questionId));
     }
 
-    return this.questions.filter((q) => incorrectIds.has(q.questionId));
+    return this.questions.filter((q) => incorrectIds.has(q.questionId) && !dismissed.has(q.questionId));
   }
 
   // --- Bookmarks ---
@@ -583,6 +663,28 @@ class MockStore {
     return { success: true };
   }
 
+  removeIncorrectQuestion(questionId) {
+    if (!this.dismissedIncorrectIds) this.dismissedIncorrectIds = [];
+    if (!this.dismissedIncorrectIds.includes(questionId)) {
+      this.dismissedIncorrectIds.push(questionId);
+    }
+    this.saveState();
+    return { success: true };
+  }
+
+  clearAllRevisionItems() {
+    this.bookmarks = [];
+    this.studentDashboard.bookmarkCount = 0;
+    if (!this.dismissedIncorrectIds) this.dismissedIncorrectIds = [];
+    this.questions.forEach((q) => {
+      if (!this.dismissedIncorrectIds.includes(q.questionId)) {
+        this.dismissedIncorrectIds.push(q.questionId);
+      }
+    });
+    this.saveState();
+    return { success: true };
+  }
+
   // --- Analytics Dashboard ---
   getStudentDashboard() {
     return this.studentDashboard;
@@ -590,14 +692,554 @@ class MockStore {
 
   // --- Coordinator Features ---
   getCoordinatorDashboard() {
+    const students = this.users.filter((u) => u.role === 'student');
+    const totalStudents = students.length || 24;
+    const activeTests = this.mockTests.length || 8;
+    const completedAttempts = 42;
+    const inProgressAttempts = 6;
+    const totalAttempts = completedAttempts + inProgressAttempts;
+    const uniqueStudentsAttempted = 18;
+    const unattemptedStudents = Math.max(0, totalStudents - uniqueStudentsAttempted);
+    const avgAccuracy = 68;
+    const avgScore = 14.5;
+    const completionRate = totalAttempts > 0 ? Math.round((completedAttempts / totalAttempts) * 100) : 88;
+    const passRate = 71;
+
+    const summaryCards = [
+      {
+        label: 'Accessible Students',
+        value: totalStudents,
+        subtext: `${unattemptedStudents} pending mock tests`,
+        icon: 'Users',
+        color: 'teal'
+      },
+      {
+        label: 'Available Mock Tests',
+        value: activeTests,
+        subtext: 'Campus placement assessments',
+        icon: 'FolderGit2',
+        color: 'blue'
+      },
+      {
+        label: 'Students Attempted',
+        value: uniqueStudentsAttempted,
+        subtext: `${Math.round((uniqueStudentsAttempted / totalStudents) * 100)}% participation rate`,
+        icon: 'CheckCircle2',
+        color: 'emerald'
+      },
+      {
+        label: 'Completed Attempts',
+        value: completedAttempts,
+        subtext: `${completionRate}% attempt completion rate`,
+        icon: 'Award',
+        color: 'amber'
+      },
+      {
+        label: 'In-Progress Tests',
+        value: inProgressAttempts,
+        subtext: 'Currently active test sessions',
+        icon: 'Timer',
+        color: 'purple'
+      },
+      {
+        label: 'Unattempted Students',
+        value: unattemptedStudents,
+        subtext: 'Zero mock test attempts',
+        icon: 'AlertCircle',
+        color: 'rose'
+      },
+      {
+        label: 'Average Accuracy',
+        value: `${avgAccuracy}%`,
+        subtext: `Avg score: ${avgScore} pts (${passRate}% pass rate)`,
+        icon: 'TrendingUp',
+        color: 'emerald'
+      },
+      {
+        label: 'Completion Rate',
+        value: `${completionRate}%`,
+        subtext: `${completedAttempts} / ${totalAttempts} attempts`,
+        icon: 'Activity',
+        color: 'sky'
+      }
+    ];
+
+    const recentActivity = [
+      {
+        _id: 'att_demo_1',
+        attemptId: 'att_demo_1',
+        studentName: students[0]?.name || 'Aarav Sharma',
+        studentEmail: students[0]?.email || 'aarav.sharma@readyup.edu',
+        studentId: students[0]?.studentId || 'STU-2026-001',
+        department: students[0]?.department || 'Computer Science & Engineering',
+        testTitle: this.mockTests[0]?.title || 'TCS National Mock Test',
+        score: 16,
+        totalMarks: 20,
+        accuracy: 80,
+        status: 'completed',
+        result: 'Passed',
+        durationSeconds: 1540,
+        createdAt: new Date(Date.now() - 3600000).toISOString()
+      },
+      {
+        _id: 'att_demo_2',
+        attemptId: 'att_demo_2',
+        studentName: students[1]?.name || 'Priya Patel',
+        studentEmail: students[1]?.email || 'priya.patel@readyup.edu',
+        studentId: students[1]?.studentId || 'STU-2026-002',
+        department: students[1]?.department || 'Information Technology',
+        testTitle: this.mockTests[1]?.title || 'Infosys Reasoning Sprint',
+        score: 11,
+        totalMarks: 15,
+        accuracy: 73,
+        status: 'completed',
+        result: 'Passed',
+        durationSeconds: 1120,
+        createdAt: new Date(Date.now() - 7200000).toISOString()
+      },
+      {
+        _id: 'att_demo_3',
+        attemptId: 'att_demo_3',
+        studentName: students[2]?.name || 'Rohan Verma',
+        studentEmail: students[2]?.email || 'rohan.verma@readyup.edu',
+        studentId: students[2]?.studentId || 'STU-2026-003',
+        department: students[2]?.department || 'Electronics Engineering',
+        testTitle: this.mockTests[0]?.title || 'TCS National Mock Test',
+        score: 0,
+        totalMarks: 20,
+        accuracy: 0,
+        status: 'in-progress',
+        result: 'Incomplete',
+        durationSeconds: 420,
+        createdAt: new Date(Date.now() - 900000).toISOString()
+      }
+    ];
+
     return {
-      metrics: [
-        { label: "Total Question Bank", value: this.questions.length, subtext: "Active verified questions", icon: "BookOpen", color: "teal" },
-        { label: "Active Aptitude Topics", value: 15, subtext: "Across 4 categories", icon: "FolderGit2", color: "blue" },
-        { label: "Target Companies", value: this.companies.length, subtext: "Placement test patterns", icon: "Building2", color: "amber" },
-        { label: "Spreadsheet Imports", value: this.coordinator.importHistory.length, subtext: "Processed batches", icon: "FileSpreadsheet", color: "emerald" }
+      metrics: {
+        totalQuestions: this.questions.length,
+        activeQuestions: this.questions.length,
+        verifiedQuestions: this.questions.length,
+        needsReview: 0,
+        activeTests,
+        pendingImports: 0,
+        totalStudents,
+        uniqueStudentsAttempted,
+        completedAttempts,
+        inProgressAttempts,
+        totalAttempts,
+        unattemptedStudents,
+        averageScore: avgScore,
+        averageAccuracy: avgAccuracy,
+        completionRate,
+        passRate
+      },
+      summaryCards,
+      recentActivity,
+      metricCards: [
+        { label: 'Total Questions', value: this.questions.length, subtext: 'Active verified questions', icon: 'BookOpen', color: 'teal' },
+        { label: 'Active Mock Tests', value: activeTests, subtext: 'Across placement companies', icon: 'FolderGit2', color: 'blue' },
+        { label: 'Student Attempts', value: totalAttempts, subtext: `${uniqueStudentsAttempted} unique candidates`, icon: 'CheckCircle2', color: 'emerald' },
+        { label: 'Average Accuracy', value: `${avgAccuracy}%`, subtext: `${passRate}% pass rate`, icon: 'TrendingUp', color: 'amber' }
       ],
       importHistory: this.coordinator.importHistory
+    };
+  }
+
+  getCoordinatorMockTests({ search, category, status, page = 1, limit = 20 } = {}) {
+    const students = this.users.filter((u) => u.role === 'student');
+    const totalStudents = students.length || 24;
+
+    let list = this.mockTests.map((t, idx) => {
+      const eligibleCount = t.assignedBatches?.length ? 15 : totalStudents;
+      const uniqueStudents = Math.min(eligibleCount, 12 + (idx % 6));
+      const completed = Math.min(uniqueStudents, 10 + (idx % 4));
+      const inProgress = Math.max(0, uniqueStudents - completed);
+      const unattempted = Math.max(0, eligibleCount - uniqueStudents);
+      const avgAcc = 60 + ((idx * 7) % 30);
+
+      return {
+        _id: t._id,
+        title: t.title,
+        slug: t.slug,
+        type: t.type || 'company_mock',
+        company: t.company || 'General',
+        category: t.category || 'Mixed Aptitude',
+        difficulty: t.difficulty || 'medium',
+        durationMinutes: t.durationMinutes || 30,
+        totalQuestions: t.totalQuestions || 15,
+        passingScore: t.passingScore || 60,
+        assignedBatches: t.assignedBatches || [],
+        assignedStudentsCount: t.assignedStudents?.length || 0,
+        startDate: t.startDate || null,
+        endDate: t.endDate || null,
+        isScheduled: Boolean(t.isScheduled),
+        scheduleStatus: t.endDate && new Date() > new Date(t.endDate) ? 'closed' : t.startDate && new Date() < new Date(t.startDate) ? 'upcoming' : 'active',
+        eligibleStudentsCount: eligibleCount,
+        uniqueStudentsAttempted: uniqueStudents,
+        totalAttempts: completed + inProgress + (idx % 3),
+        completedAttempts: completed,
+        inProgressAttempts: inProgress,
+        unattemptedCount: unattempted,
+        averageScore: Number(((avgAcc / 100) * (t.totalQuestions || 15)).toFixed(1)),
+        averageAccuracy: avgAcc,
+        passedCount: Math.round(completed * 0.75),
+        passRate: completed > 0 ? 75 : 0,
+        createdAt: t.createdAt || new Date().toISOString()
+      };
+    });
+
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter((t) => t.title.toLowerCase().includes(q) || t.company.toLowerCase().includes(q));
+    }
+    if (category && category !== 'all') {
+      list = list.filter((t) => t.category.toLowerCase() === category.toLowerCase());
+    }
+    if (status && status !== 'all') {
+      if (status === 'completed') {
+        list = list.filter((t) => t.completedAttempts > 0);
+      } else if (status === 'in-progress') {
+        list = list.filter((t) => t.inProgressAttempts > 0);
+      } else if (status === 'closed' || status === 'expired') {
+        list = list.filter((t) => t.scheduleStatus === 'closed');
+      } else {
+        list = list.filter((t) => t.scheduleStatus === status);
+      }
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const paginated = list.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+    return {
+      data: paginated,
+      pagination: {
+        total: list.length,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(list.length / limitNum) || 1
+      }
+    };
+  }
+
+  getCoordinatorMockTestDetail(testId) {
+    const test = this.mockTests.find((t) => t._id === testId || t.slug === testId);
+    if (!test) throw { status: 404, message: 'Mock test not found' };
+    const students = this.users.filter((u) => u.role === 'student');
+    return {
+      ...test,
+      stats: {
+        totalAttempts: 25,
+        completedAttempts: 20,
+        inProgressAttempts: 3,
+        uniqueStudentsAttempted: 16,
+        eligibleStudentsCount: students.length || 24,
+        unattemptedCount: 8,
+        averageScore: 12.4,
+        averageAccuracy: 69,
+        passedCount: 15,
+        passRate: 75,
+        scheduleStatus: 'active'
+      }
+    };
+  }
+
+  getCoordinatorMockTestAttempts(testId, { search, status, page = 1, limit = 20 } = {}) {
+    const students = this.users.filter((u) => u.role === 'student');
+    const test = this.mockTests.find((t) => t._id === testId) || this.mockTests[0];
+
+    let attempts = students.map((s, idx) => {
+      const isCompleted = idx % 5 !== 0;
+      const score = 10 + (idx % 6);
+      const totalMarks = test?.totalQuestions || 15;
+      const accuracy = Math.round((score / totalMarks) * 100);
+
+      return {
+        _id: `att_${testId}_${s._id}`,
+        attemptId: `att_${testId}_${s._id}`,
+        studentId: s.studentId || `STU-2026-${String(idx + 1).padStart(3, '0')}`,
+        studentName: s.name,
+        studentEmail: s.email,
+        department: s.department || 'Computer Science & Engineering',
+        graduationYear: s.graduationYear || 2026,
+        testTitle: test?.title || 'Mock Test',
+        score: isCompleted ? score : 0,
+        totalMarks,
+        accuracy: isCompleted ? accuracy : 0,
+        status: isCompleted ? 'completed' : 'in-progress',
+        result: isCompleted ? (accuracy >= 60 ? 'Passed' : 'Needs Review') : 'Incomplete',
+        attemptNumber: 1 + (idx % 2),
+        startTime: new Date(Date.now() - 3600000 * (idx + 1)).toISOString(),
+        submissionTime: isCompleted ? new Date(Date.now() - 3600000 * idx).toISOString() : null,
+        durationSeconds: isCompleted ? 1200 + idx * 30 : 450,
+        createdAt: new Date(Date.now() - 3600000 * (idx + 1)).toISOString()
+      };
+    });
+
+    if (search) {
+      const q = search.toLowerCase();
+      attempts = attempts.filter((a) => a.studentName.toLowerCase().includes(q) || a.studentEmail.toLowerCase().includes(q) || a.studentId.toLowerCase().includes(q));
+    }
+    if (status && status !== 'all') {
+      attempts = attempts.filter((a) => a.status === status);
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    return {
+      data: attempts.slice((pageNum - 1) * limitNum, pageNum * limitNum),
+      pagination: {
+        total: attempts.length,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(attempts.length / limitNum) || 1
+      }
+    };
+  }
+
+  assignCoordinatorMockTest(testId, data) {
+    const test = this.mockTests.find((t) => t._id === testId);
+    if (!test) throw { status: 404, message: 'Mock test not found' };
+
+    Object.assign(test, {
+      assignedBatches: data.assignedBatches || [],
+      assignedStudents: data.assignedStudents || [],
+      startDate: data.startDate || null,
+      endDate: data.endDate || null,
+      isScheduled: Boolean(data.isScheduled)
+    });
+
+    this.saveState();
+    return test;
+  }
+
+  getDepartments() {
+    return [
+      "Computer Science & Engineering",
+      "Information Technology",
+      "Electronics & Communication Engineering",
+      "Electrical Engineering",
+      "Mechanical Engineering",
+      "Civil Engineering",
+      "Computer Engineering",
+      "Central Administration",
+      "Training & Placement Cell"
+    ];
+  }
+
+  createMockTest(data) {
+    const newId = `mock_test_${Date.now()}`;
+    const newTest = {
+      _id: newId,
+      title: data.title,
+      slug: data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      type: data.type || 'company_mock',
+      category: data.category || 'Mixed Aptitude',
+      company: data.company || 'General',
+      durationMinutes: Number(data.durationMinutes) || 60,
+      totalQuestions: data.questions?.length || 15,
+      totalMarks: data.totalMarks || data.questions?.length || 15,
+      passingScore: Number(data.passingScore) || 60,
+      assignedDepartments: data.assignedDepartments || [],
+      assignedBatches: data.assignedDepartments || [],
+      startDate: data.startDate || null,
+      endDate: data.endDate || null,
+      isScheduled: Boolean(data.isScheduled),
+      status: data.status || 'published',
+      isActive: data.status !== 'archived',
+      questions: data.questions || [],
+      createdAt: new Date().toISOString()
+    };
+    this.mockTests.unshift(newTest);
+    this.saveState();
+    return newTest;
+  }
+
+  updateMockTest(testId, data) {
+    const idx = this.mockTests.findIndex((t) => t._id === testId);
+    if (idx === -1) throw { status: 404, message: 'Mock test not found' };
+    this.mockTests[idx] = {
+      ...this.mockTests[idx],
+      ...data,
+      assignedDepartments: data.assignedDepartments || this.mockTests[idx].assignedDepartments,
+      assignedBatches: data.assignedDepartments || this.mockTests[idx].assignedBatches,
+    };
+    this.saveState();
+    return this.mockTests[idx];
+  }
+
+  archiveMockTest(testId) {
+    const idx = this.mockTests.findIndex((t) => t._id === testId);
+    if (idx === -1) throw { status: 404, message: 'Mock test not found' };
+    this.mockTests[idx].isActive = false;
+    this.mockTests[idx].status = 'archived';
+    this.saveState();
+    return { testId, title: this.mockTests[idx].title, status: 'archived', isActive: false };
+  }
+
+  publishCoordinatorMockTest(testId) {
+    const idx = this.mockTests.findIndex((t) => t._id === testId);
+    if (idx === -1) throw { status: 404, message: 'Mock test not found' };
+    this.mockTests[idx].status = 'published';
+    this.mockTests[idx].isActive = true;
+    if (Array.isArray(this.notifications)) {
+      this.notifications.unshift({
+        _id: 'notif_' + Date.now(),
+        title: 'New Mock Test Published',
+        message: `'${this.mockTests[idx].title}' is now live and available to attempt.`,
+        type: 'info',
+        link: `/tests?testId=${this.mockTests[idx]._id}`,
+        isRead: false,
+        createdAt: new Date().toISOString()
+      });
+    }
+    this.saveState();
+    return this.mockTests[idx];
+  }
+
+  getCoordinatorStudents({ search, department, graduationYear, page = 1, limit = 20 } = {}) {
+    let list = this.users.filter((u) => u.role === 'student');
+
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter((s) => s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q) || (s.studentId && s.studentId.toLowerCase().includes(q)));
+    }
+    if (department && department !== 'all') {
+      const deptLower = department.toLowerCase();
+      list = list.filter((s) => s.department && (s.department.toLowerCase().includes(deptLower) || deptLower.includes(s.department.toLowerCase())));
+    }
+    if (graduationYear && graduationYear !== 'all') {
+      list = list.filter((s) => String(s.graduationYear) === String(graduationYear));
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const paginated = list.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+    const formatted = paginated.map((s, idx) => ({
+      _id: s._id,
+      name: s.name,
+      email: s.email,
+      studentId: s.studentId || `STU-2026-${String(idx + 1).padStart(3, '0')}`,
+      department: s.department || 'Computer Science & Engineering',
+      graduationYear: s.graduationYear || 2026,
+      college: s.college || 'National Institute of Technology',
+      isActive: s.isActive !== false,
+      testsAttempted: 2 + (idx % 4),
+      testsCompleted: 2 + (idx % 3),
+      passedCount: 1 + (idx % 3),
+      avgAccuracy: 62 + ((idx * 9) % 32),
+      lastAttemptDate: new Date(Date.now() - idx * 86400000).toISOString()
+    }));
+
+    return {
+      data: formatted,
+      pagination: {
+        total: list.length,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(list.length / limitNum) || 1
+      }
+    };
+  }
+
+  getCoordinatorStudentDetail(studentId) {
+    const student = this.users.find((u) => u._id === studentId || u.studentId === studentId);
+    if (!student) throw { status: 404, message: 'Student not found' };
+
+    const attempts = (this.testHistory || []).map((h, i) => ({
+      _id: `att_hist_${i}`,
+      attemptId: `att_hist_${i}`,
+      title: h.title,
+      type: h.type || 'mock-test',
+      score: h.score,
+      totalMarks: h.totalQuestions || 15,
+      accuracy: h.accuracy,
+      status: 'completed',
+      result: h.accuracy >= 60 ? 'Passed' : 'Needs Review',
+      durationSeconds: 1200,
+      createdAt: h.completedAt || new Date().toISOString()
+    }));
+
+    return {
+      student: {
+        _id: student._id,
+        name: student.name,
+        email: student.email,
+        studentId: student.studentId || 'STU-2026-001',
+        department: student.department || 'Computer Science & Engineering',
+        graduationYear: student.graduationYear || 2026,
+        college: student.college || 'ReadyUp Campus',
+        isActive: student.isActive !== false,
+        createdAt: student.createdAt || new Date().toISOString()
+      },
+      summary: {
+        totalAttempts: attempts.length || 3,
+        completedAttempts: attempts.length || 3,
+        passedCount: attempts.filter((a) => a.result === 'Passed').length || 2,
+        passRate: 75,
+        avgAccuracy: 71
+      },
+      progression: [
+        { title: 'TCS Diagnostic Drill', score: 12, totalMarks: 15, accuracy: 80, date: '2026-10-15' },
+        { title: 'Infosys Specialist Sprint', score: 9, totalMarks: 15, accuracy: 60, date: '2026-10-20' },
+        { title: 'Campus Qualifier Exam', score: 14, totalMarks: 15, accuracy: 93, date: '2026-10-25' }
+      ],
+      topicBreakdown: [
+        { topic: 'Time and Work', category: 'Quantitative Aptitude', total: 6, correct: 5, answered: 6, accuracy: 83 },
+        { topic: 'Syllogisms', category: 'Logical Reasoning', total: 5, correct: 4, answered: 5, accuracy: 80 },
+        { topic: 'Error Spotting', category: 'Verbal Ability', total: 4, correct: 2, answered: 4, accuracy: 50 }
+      ],
+      strongTopics: [
+        { topic: 'Time and Work', accuracy: 83 },
+        { topic: 'Syllogisms', accuracy: 80 }
+      ],
+      weakTopics: [
+        { topic: 'Error Spotting', accuracy: 50 }
+      ],
+      attempts
+    };
+  }
+
+  getCoordinatorAnalytics() {
+    const topics = [
+      { topic: 'Time and Work', category: 'Quantitative Aptitude', totalQuestions: 120, answeredCount: 110, correctCount: 92, accuracy: 84, status: 'strong' },
+      { topic: 'Syllogisms', category: 'Logical Reasoning', totalQuestions: 95, answeredCount: 90, correctCount: 72, accuracy: 80, status: 'strong' },
+      { topic: 'Seating Arrangement', category: 'Logical Reasoning', totalQuestions: 80, answeredCount: 75, correctCount: 54, accuracy: 72, status: 'strong' },
+      { topic: 'Percentages & Profit', category: 'Quantitative Aptitude', totalQuestions: 110, answeredCount: 100, correctCount: 65, accuracy: 65, status: 'moderate' },
+      { topic: 'Data Interpretation', category: 'Quantitative Aptitude', totalQuestions: 75, answeredCount: 70, correctCount: 42, accuracy: 60, status: 'moderate' },
+      { topic: 'Reading Comprehension', category: 'Verbal Ability', totalQuestions: 85, answeredCount: 80, correctCount: 38, accuracy: 48, status: 'weak' },
+      { topic: 'Vocabulary & Sentence Completion', category: 'Verbal Ability', totalQuestions: 90, answeredCount: 85, correctCount: 39, accuracy: 46, status: 'weak' },
+      { topic: 'Probability & Permutations', category: 'Quantitative Aptitude', totalQuestions: 65, answeredCount: 60, correctCount: 24, accuracy: 40, status: 'weak' }
+    ];
+
+    const strongTopics = topics.filter((t) => t.status === 'strong');
+    const weakTopics = topics.filter((t) => t.status === 'weak');
+
+    const atRiskStudents = [
+      { _id: 'risk_1', name: 'Vikram Mehta', email: 'vikram.mehta@readyup.edu', studentId: 'STU-2026-014', department: 'Mechanical Engineering', completedTests: 3, avgAccuracy: 42, failedCount: 3 },
+      { _id: 'risk_2', name: 'Neha Gupta', email: 'neha.gupta@readyup.edu', studentId: 'STU-2026-021', department: 'Civil Engineering', completedTests: 2, avgAccuracy: 46, failedCount: 2 },
+      { _id: 'risk_3', name: 'Siddharth Rao', email: 'siddharth.rao@readyup.edu', studentId: 'STU-2026-008', department: 'Electrical Engineering', completedTests: 4, avgAccuracy: 48, failedCount: 2 }
+    ];
+
+    const testComparison = this.mockTests.slice(0, 6).map((t, i) => ({
+      title: t.title,
+      category: t.category || 'General',
+      company: t.company || 'Placement',
+      durationMinutes: t.durationMinutes || 30,
+      totalQuestions: t.totalQuestions || 15,
+      attemptsCount: 20 + i * 5,
+      averageScore: 11.5 + (i % 3)
+    }));
+
+    return {
+      topicAccuracy: topics,
+      strongTopics,
+      weakTopics,
+      atRiskStudents,
+      testComparison
     };
   }
 

@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   Brain,
@@ -14,20 +14,50 @@ import {
   Users,
   ShieldCheck,
   Sparkles,
-  Award
+  Award,
+  BarChart3,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { useActiveTest } from '../../context/ActiveTestContext';
 
 export default function Sidebar({ isOpen, onClose }) {
   const { user, role, logout } = useAuth();
   const { addToast } = useToast();
+  const { requestSidebarNavigation } = useActiveTest();
   const navigate = useNavigate();
+
+  const getRoleLandingPath = () => {
+    const effectiveRole = user?.role || role;
+    if (effectiveRole === 'coordinator') return '/coordinator/dashboard';
+    if (effectiveRole === 'admin') return '/admin/dashboard';
+    return '/dashboard';
+  };
 
   const handleLogout = async () => {
     await logout();
     addToast({ title: 'Signed out', message: 'You have been logged out successfully.', type: 'info' });
-    navigate('/login');
+  };
+
+  const handleNavClick = (e, destination) => {
+    const canNavigate = requestSidebarNavigation(destination);
+    if (!canNavigate) {
+      e.preventDefault();
+      onClose?.();
+      return;
+    }
+    onClose?.();
+  };
+
+  const handleLogoutClick = (e) => {
+    const canNavigate = requestSidebarNavigation(() => handleLogout());
+    if (!canNavigate) {
+      e.preventDefault();
+      onClose?.();
+      return;
+    }
+    handleLogout();
   };
 
   // Nav configurations based on exact 3 roles: Student, Coordinator, Admin
@@ -42,6 +72,10 @@ export default function Sidebar({ isOpen, onClose }) {
     ],
     coordinator: [
       { name: 'Overview', path: '/coordinator/dashboard', icon: LayoutDashboard },
+      { name: 'Mock Tests', path: '/coordinator/mock-tests', icon: Timer },
+      { name: 'Students', path: '/coordinator/students', icon: Users },
+      { name: 'Analytics', path: '/coordinator/analytics', icon: BarChart3 },
+      { name: 'Reports', path: '/coordinator/reports', icon: FileText },
       { name: 'Question Bank', path: '/coordinator/questions', icon: BookOpen },
       { name: 'Spreadsheet Import', path: '/coordinator/import', icon: FileSpreadsheet },
       { name: 'Import History', path: '/coordinator/history', icon: History }
@@ -70,19 +104,24 @@ export default function Sidebar({ isOpen, onClose }) {
       >
         {/* Brand Header */}
         <div>
-          <div className="p-6 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white font-bold text-lg shadow-sm shadow-teal-500/20">
+          <Link
+            to={getRoleLandingPath()}
+            onClick={(e) => handleNavClick(e, getRoleLandingPath())}
+            className="p-6 flex items-center gap-3 group focus:outline-hidden focus:ring-2 focus:ring-teal-500 rounded-2xl transition-all cursor-pointer"
+            title="Return to Dashboard"
+          >
+            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white font-bold text-lg shadow-sm shadow-teal-500/20 group-hover:scale-105 transition-transform">
               <Award className="w-6 h-6 text-white" />
             </div>
             <div>
-              <div className="font-bold text-slate-900 dark:text-white tracking-tight leading-none text-base">
+              <div className="font-bold text-slate-900 dark:text-white tracking-tight leading-none text-base group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">
                 ReadyUp
               </div>
               <div className="text-[11px] font-medium text-slate-400 dark:text-slate-500 mt-1 uppercase tracking-wider">
                 {role === 'coordinator' ? 'Coordinator Cell' : role === 'admin' ? 'Admin Portal' : 'Student Aptitude'}
               </div>
             </div>
-          </div>
+          </Link>
 
           {/* Navigation Links */}
           <nav className="px-3 py-2 space-y-1">
@@ -92,7 +131,7 @@ export default function Sidebar({ isOpen, onClose }) {
                 <NavLink
                   key={item.path}
                   to={item.path}
-                  onClick={onClose}
+                  onClick={(e) => handleNavClick(e, item.path)}
                   className={({ isActive }) =>
                     `flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all group ${
                       isActive
@@ -139,7 +178,7 @@ export default function Sidebar({ isOpen, onClose }) {
               </div>
               <div className="truncate text-left">
                 <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
-                  {user?.name || 'Aarav Sharma'}
+                  {user?.name || 'User'}
                 </p>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 capitalize">
                   {role}
@@ -148,7 +187,7 @@ export default function Sidebar({ isOpen, onClose }) {
             </div>
 
             <button
-              onClick={handleLogout}
+              onClick={handleLogoutClick}
               className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
               title="Sign out"
               aria-label="Sign out"

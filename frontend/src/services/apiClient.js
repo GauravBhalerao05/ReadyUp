@@ -9,6 +9,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 class ApiClient {
   constructor() {
     this.tokenKey = 'readyup_auth_token';
+    this.onUnauthorizedCallback = null;
+  }
+
+  setOnUnauthorized(cb) {
+    this.onUnauthorizedCallback = cb;
   }
 
   getToken() {
@@ -36,15 +41,42 @@ class ApiClient {
       requestHeaders['Content-Type'] = 'application/json';
     }
 
-    // Never attach synthetic mock tokens to real backend HTTP requests.
-    // Route intentional mock sessions directly to the offline fallback store,
-    // except for auth login and register requests which should authenticate against the live backend.
-    if (token && token.startsWith('mock_') && !endpoint.startsWith('/auth/login') && !endpoint.startsWith('/auth/register')) {
-      return this.handleOfflineFallback(endpoint, method, data);
+    let activeToken = token;
+    // If user holds a synthetic mock token, check if live backend is online to seamlessly upgrade to live MongoDB session
+    if (activeToken && activeToken.startsWith('mock_') && !endpoint.startsWith('/auth/login') && !endpoint.startsWith('/auth/register')) {
+      const savedUserStr = localStorage.getItem('readyup_auth_user');
+      let savedUser = null;
+      try { savedUser = savedUserStr ? JSON.parse(savedUserStr) : null; } catch {}
+      const role = savedUser?.role || (activeToken.includes('coordinator') ? 'coordinator' : activeToken.includes('admin') ? 'admin' : 'student');
+      const email = savedUser?.email || `${role}@readyup.edu`;
+
+      try {
+        const liveAuth = await fetch(`${API_BASE_URL}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password: 'Password123!' })
+        });
+        if (liveAuth.ok) {
+          const authJson = await liveAuth.json();
+          if (authJson?.data?.token) {
+            activeToken = authJson.data.token;
+            this.setToken(activeToken);
+            if (authJson.data.user) {
+              localStorage.setItem('readyup_auth_user', JSON.stringify(authJson.data.user));
+            }
+          }
+        }
+      } catch {
+        // Backend genuinely unreachable, fall through to offline fallback
+      }
+
+      if (activeToken && activeToken.startsWith('mock_')) {
+        return this.handleOfflineFallback(endpoint, method, data);
+      }
     }
 
-    if (token) {
-      requestHeaders['Authorization'] = `Bearer ${token}`;
+    if (activeToken) {
+      requestHeaders['Authorization'] = `Bearer ${activeToken}`;
     }
 
     const isImportOperation = isMultipart || endpoint.includes('/import');
@@ -74,6 +106,13 @@ class ApiClient {
       const json = await response.json().catch(() => null);
 
       if (!response.ok) {
+        if (response.status === 401 && !endpoint.startsWith('/auth/login')) {
+          this.clearToken();
+          localStorage.removeItem('readyup_auth_user');
+          if (this.onUnauthorizedCallback) {
+            this.onUnauthorizedCallback();
+          }
+        }
         const error = new Error(json?.message || `Request failed with status ${response.status}`);
         error.status = response.status;
         error.errors = json?.errors || [];
@@ -118,14 +157,13 @@ class ApiClient {
 
     // Auth
     if (endpoint === '/auth/login' && method === 'POST') {
-      const result = mockStore.login(data.email, data.password);
+      const result = mockStore.login(data.email, data.password, data.requiredRole || data.role);
       this.setToken(result.token);
       return { success: true, message: 'Logged in successfully', data: result };
     }
     if (endpoint === '/auth/register' && method === 'POST') {
       const result = mockStore.register(data);
-      this.setToken(result.token);
-      return { success: true, message: 'User registered successfully', data: result };
+      return { success: true, message: 'Account created successfully. Please log in.', data: { user: result.user } };
     }
     if (endpoint === '/auth/logout' && method === 'POST') {
       this.clearToken();
@@ -142,6 +180,14 @@ class ApiClient {
     }
     if (endpoint === '/auth/change-password' && method === 'PUT') {
       return { success: true, message: 'Password changed successfully', data: null };
+    }
+    if (endpoint === '/auth/forgot-password' && method === 'POST') {
+      const res = mockStore.forgotPassword(data.email, data.role);
+      return res;
+    }
+    if (endpoint === '/auth/reset-password' && method === 'POST') {
+      const res = mockStore.resetPassword(data.token, data.password);
+      return res;
     }
 
     // Questions & Categories
@@ -209,11 +255,25 @@ class ApiClient {
       const review = mockStore.getAttemptReview(attemptId);
       return { success: true, message: 'Review retrieved', data: review };
     }
+    if (endpoint.includes('/attempts/') && !endpoint.includes('/review') && !endpoint.includes('/submit') && method === 'GET') {
+      const attemptId = endpoint.split('/')[3];
+      const session = mockStore.getAttemptSession ? mockStore.getAttemptSession(attemptId) : null;
+      return { success: true, message: 'Attempt retrieved', data: session };
+    }
     if (endpoint === '/tests/history' && method === 'GET') {
       return { success: true, message: 'History retrieved', data: mockStore.getTestHistory() };
     }
     if (endpoint === '/tests/incorrect' && method === 'GET') {
       return { success: true, message: 'Incorrect questions retrieved', data: mockStore.getIncorrectQuestions() };
+    }
+    if ((endpoint === '/tests/revision/clear-all' && method === 'POST') || (endpoint === '/tests/incorrect/all' && method === 'DELETE')) {
+      mockStore.clearAllRevisionItems();
+      return { success: true, message: 'All active revision items cleared successfully', data: null };
+    }
+    if (endpoint.startsWith('/tests/incorrect/') && method === 'DELETE') {
+      const qId = decodeURIComponent(endpoint.split('/')[3] || '');
+      mockStore.removeIncorrectQuestion(qId);
+      return { success: true, message: 'Question removed from revision centre', data: { questionId: qId } };
     }
 
     // Bookmarks
@@ -238,6 +298,70 @@ class ApiClient {
     // Coordinator
     if (endpoint === '/coordinator/dashboard' && method === 'GET') {
       return { success: true, message: 'Coordinator dashboard retrieved', data: mockStore.getCoordinatorDashboard() };
+    }
+    if (endpoint === '/coordinator/departments' && method === 'GET') {
+      return { success: true, message: 'Departments retrieved', data: mockStore.getDepartments() };
+    }
+    if (endpoint === '/coordinator/mock-tests' && method === 'POST') {
+      const created = mockStore.createMockTest(data);
+      return { success: true, message: 'Mock test created successfully', data: created };
+    }
+    if (endpoint.startsWith('/coordinator/mock-tests/') && method === 'PUT') {
+      const testId = endpoint.split('/')[3];
+      const updated = mockStore.updateMockTest(testId, data);
+      return { success: true, message: 'Mock test updated successfully', data: updated };
+    }
+    if (
+      (endpoint.startsWith('/coordinator/mock-tests/') && method === 'DELETE') ||
+      (endpoint.includes('/mock-tests/') && endpoint.endsWith('/archive'))
+    ) {
+      const testId = endpoint.split('/')[3];
+      const archived = mockStore.archiveMockTest(testId);
+      return { success: true, message: 'Mock test safely archived', data: archived };
+    }
+    if (
+      endpoint.includes('/mock-tests/') &&
+      endpoint.endsWith('/publish') &&
+      (method === 'PATCH' || method === 'POST')
+    ) {
+      const testId = endpoint.split('/')[3];
+      const published = mockStore.publishCoordinatorMockTest
+        ? mockStore.publishCoordinatorMockTest(testId)
+        : mockStore.updateMockTest(testId, { status: 'published', isActive: true });
+      return { success: true, message: 'Mock test published successfully', data: published };
+    }
+    if (endpoint.startsWith('/coordinator/mock-tests') && method === 'GET') {
+      if (endpoint === '/coordinator/mock-tests' || endpoint.includes('?')) {
+        const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
+        const res = mockStore.getCoordinatorMockTests(Object.fromEntries(urlParams.entries()));
+        return { success: true, message: 'Mock test monitoring data retrieved', data: res.data, pagination: res.pagination };
+      }
+      if (endpoint.endsWith('/attempts') || endpoint.includes('/attempts?')) {
+        const parts = endpoint.split('/');
+        const testId = parts[3];
+        const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
+        const res = mockStore.getCoordinatorMockTestAttempts(testId, Object.fromEntries(urlParams.entries()));
+        return { success: true, message: 'Mock test attempts retrieved', data: res.data, pagination: res.pagination };
+      }
+      const testId = endpoint.split('/')[3];
+      return { success: true, message: 'Mock test details retrieved', data: mockStore.getCoordinatorMockTestDetail(testId) };
+    }
+    if (endpoint.includes('/mock-tests/') && endpoint.endsWith('/assign') && method === 'PATCH') {
+      const testId = endpoint.split('/')[3];
+      const updated = mockStore.assignCoordinatorMockTest(testId, data);
+      return { success: true, message: 'Mock test assigned and scheduled', data: updated };
+    }
+    if (endpoint.startsWith('/coordinator/students') && method === 'GET') {
+      if (endpoint === '/coordinator/students' || endpoint.includes('?')) {
+        const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
+        const res = mockStore.getCoordinatorStudents(Object.fromEntries(urlParams.entries()));
+        return { success: true, message: 'Students retrieved', data: res.data, pagination: res.pagination };
+      }
+      const studentId = endpoint.split('/')[3];
+      return { success: true, message: 'Student detail retrieved', data: mockStore.getCoordinatorStudentDetail(studentId) };
+    }
+    if (endpoint === '/coordinator/analytics' && method === 'GET') {
+      return { success: true, message: 'Analytics retrieved', data: mockStore.getCoordinatorAnalytics() };
     }
     if (endpoint === '/coordinator/import/preview' && method === 'POST') {
       const file = data?.get?.('file') || data?.file;

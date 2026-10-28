@@ -20,7 +20,20 @@ export function ThemeProvider({ children }) {
     }
   }, [isDark]);
 
-  const toggleTheme = () => setIsDark((prev) => !prev);
+  const toggleTheme = () => {
+    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const root = document.documentElement;
+
+    if (!prefersReducedMotion) {
+      root.classList.add('theme-transitioning');
+      window.clearTimeout(window.__themeTransitionTimeout);
+      window.__themeTransitionTimeout = window.setTimeout(() => {
+        root.classList.remove('theme-transitioning');
+      }, 250);
+    }
+
+    setIsDark((prev) => !prev);
+  };
 
   return (
     <ThemeContext.Provider value={{ isDark, toggleTheme }}>

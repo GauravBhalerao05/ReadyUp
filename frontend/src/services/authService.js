@@ -9,10 +9,10 @@ export const authService = {
     return res.data;
   },
 
-  async login(email, password) {
+  async login(email, password, requiredRole) {
     const res = await apiClient.request('/auth/login', {
       method: 'POST',
-      data: { email, password }
+      data: { email, password, ...(requiredRole ? { requiredRole } : {}) }
     });
     return res.data;
   },
@@ -42,6 +42,22 @@ export const authService = {
     const res = await apiClient.request('/auth/change-password', {
       method: 'PUT',
       data: { currentPassword, newPassword }
+    });
+    return res;
+  },
+
+  async forgotPassword(email, role) {
+    const res = await apiClient.request('/auth/forgot-password', {
+      method: 'POST',
+      data: { email, role }
+    });
+    return res;
+  },
+
+  async resetPassword(token, password) {
+    const res = await apiClient.request('/auth/reset-password', {
+      method: 'POST',
+      data: { token, password }
     });
     return res;
   }

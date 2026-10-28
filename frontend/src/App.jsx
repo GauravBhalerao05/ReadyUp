@@ -1,7 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigationType, useNavigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ActiveTestProvider, useActiveTest } from './context/ActiveTestContext';
 
 import AppLayout from './components/common/AppLayout';
 import LandingPage from './pages/LandingPage';
@@ -22,6 +24,10 @@ import StudentProfilePage from './pages/StudentProfilePage';
 
 // Coordinator Pages
 import CoordinatorDashboardPage from './pages/CoordinatorDashboardPage';
+import CoordinatorMockTestsPage from './pages/CoordinatorMockTestsPage';
+import CoordinatorStudentsPage from './pages/CoordinatorStudentsPage';
+import CoordinatorAnalyticsPage from './pages/CoordinatorAnalyticsPage';
+import CoordinatorReportsPage from './pages/CoordinatorReportsPage';
 import CoordinatorImportPage from './pages/CoordinatorImportPage';
 import CoordinatorQuestionsPage from './pages/CoordinatorQuestionsPage';
 import CoordinatorHistoryPage from './pages/CoordinatorHistoryPage';
@@ -33,7 +39,11 @@ import AdminAuditLogsPage from './pages/AdminAuditLogsPage';
 
 // Protected Route Component
 function ProtectedRoute({ children, allowedRoles }) {
-  const { user, role, isAuthenticated } = useAuth();
+  const { role, isAuthenticated, isLoggingOut } = useAuth();
+
+  if (isLoggingOut) {
+    return null;
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
@@ -49,21 +59,67 @@ function ProtectedRoute({ children, allowedRoles }) {
   return children;
 }
 
-// Smart Root Redirect based on Authentication and Verified Role
+// Handler for browser Back navigation policy:
+// When the user presses the browser Back button from an authenticated dashboard/page to a public route,
+// end the current authenticated client session and redirect to the public Landing Page '/'
+function AuthBackNavigationHandler() {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const navigate = useNavigate();
+  const { isAuthenticated, logout, isLoggingOut } = useAuth();
+  const { activeTest, requestSidebarNavigation } = useActiveTest();
+
+  const prevPathRef = useRef(null);
+  const wasAuthRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const prevPath = prevPathRef.current;
+    const currentPath = location.pathname;
+    const wasAuth = wasAuthRef.current;
+
+    // Keep refs updated for tracking transitions
+    prevPathRef.current = currentPath;
+    wasAuthRef.current = isAuthenticated;
+
+    // Check if this was a POP navigation (browser Back / Forward)
+    if (navigationType === 'POP' && prevPath !== null) {
+      const publicPaths = ['/', '/landing', '/login', '/register', '/sso/callback'];
+      const isPublicPath = (path) => !path || publicPaths.some((p) => path === p || (p !== '/' && path.startsWith(p)));
+
+      const wasOnAuthenticatedPage = wasAuth && !isPublicPath(prevPath);
+      const isNowOnPublicPage = isPublicPath(currentPath);
+
+      // Back navigation from an authenticated dashboard/page to a public route
+      if (wasOnAuthenticatedPage && isNowOnPublicPage && !isLoggingOut) {
+        if (activeTest) {
+          // If an active test is in progress, do NOT silently logout or abandon the test
+          navigate(prevPath, { replace: true });
+          requestSidebarNavigation(() => {
+            logout();
+          });
+          return;
+        }
+
+        // Controlled logout: terminates client session and lands cleanly on '/'
+        logout();
+      }
+    }
+  }, [location.pathname, navigationType, isAuthenticated, isLoggingOut, logout, activeTest, requestSidebarNavigation, navigate]);
+
+  return null;
+}
+
+// Public Root Route — renders Landing Page (with role-aware workspace CTA when authenticated)
 function RootRedirect() {
-  const { isAuthenticated, role } = useAuth();
+  const { isLoggingOut, resetLoggingOut } = useAuth();
 
-  if (!isAuthenticated) {
-    return <LandingPage />;
-  }
+  useEffect(() => {
+    if (isLoggingOut) {
+      resetLoggingOut();
+    }
+  }, [isLoggingOut, resetLoggingOut]);
 
-  if (role === 'coordinator') {
-    return <Navigate to="/coordinator/dashboard" replace />;
-  }
-  if (role === 'admin') {
-    return <Navigate to="/admin/dashboard" replace />;
-  }
-  return <Navigate to="/dashboard" replace />;
+  return <LandingPage />;
 }
 
 // Modular SSO Redirect Callback Handler (Per Section 7 of API Contract)
@@ -83,9 +139,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AuthProvider>
-          <BrowserRouter>
-            <Routes>
+        <BrowserRouter>
+          <AuthProvider>
+            <ActiveTestProvider>
+              <AuthBackNavigationHandler />
+              <Routes>
               {/* Public Routes */}
               <Route path="/" element={<RootRedirect />} />
               <Route path="/landing" element={<LandingPage />} />
@@ -187,6 +245,38 @@ export default function App() {
                   }
                 />
                 <Route
+                  path="/coordinator/mock-tests"
+                  element={
+                    <ProtectedRoute allowedRoles={['coordinator', 'admin']}>
+                      <CoordinatorMockTestsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/coordinator/students"
+                  element={
+                    <ProtectedRoute allowedRoles={['coordinator', 'admin']}>
+                      <CoordinatorStudentsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/coordinator/analytics"
+                  element={
+                    <ProtectedRoute allowedRoles={['coordinator', 'admin']}>
+                      <CoordinatorAnalyticsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/coordinator/reports"
+                  element={
+                    <ProtectedRoute allowedRoles={['coordinator', 'admin']}>
+                      <CoordinatorReportsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="/coordinator/import"
                   element={
                     <ProtectedRoute allowedRoles={['coordinator', 'admin']}>
@@ -241,8 +331,9 @@ export default function App() {
               {/* Catch-all redirect */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
-          </BrowserRouter>
+          </ActiveTestProvider>
         </AuthProvider>
+      </BrowserRouter>
       </ToastProvider>
     </ThemeProvider>
   );

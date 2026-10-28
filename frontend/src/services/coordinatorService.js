@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient';
+import { apiClient, API_BASE_URL } from './apiClient';
 
 export const coordinatorService = {
   async getDashboard() {
@@ -46,5 +46,123 @@ export const coordinatorService = {
   async getImportHistory() {
     const res = await apiClient.request('/coordinator/import/history', { method: 'GET' });
     return res.data;
+  },
+
+  // Mock Test Monitoring & Scheduling
+  async getMockTests(params = {}) {
+    const cleanParams = Object.fromEntries(
+      Object.entries(params).filter(([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'all' && v !== 'All' && v !== 'undefined' && v !== 'null')
+    );
+    const query = new URLSearchParams(cleanParams).toString();
+    const endpoint = query ? `/coordinator/mock-tests?${query}` : '/coordinator/mock-tests';
+    const res = await apiClient.request(endpoint, { method: 'GET' });
+    return res;
+  },
+
+  async getMockTestDetail(testId) {
+    const res = await apiClient.request(`/coordinator/mock-tests/${testId}`, { method: 'GET' });
+    return res.data;
+  },
+
+  async getMockTestAttempts(testId, params = {}) {
+    const cleanParams = Object.fromEntries(
+      Object.entries(params).filter(([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'all' && v !== 'All' && v !== 'undefined' && v !== 'null')
+    );
+    const query = new URLSearchParams(cleanParams).toString();
+    const endpoint = query ? `/coordinator/mock-tests/${testId}/attempts?${query}` : `/coordinator/mock-tests/${testId}/attempts`;
+    const res = await apiClient.request(endpoint, { method: 'GET' });
+    return res;
+  },
+
+  async getDepartments() {
+    const res = await apiClient.request('/coordinator/departments', { method: 'GET' });
+    return res.data || [];
+  },
+
+  async createMockTest(payload) {
+    const res = await apiClient.request('/coordinator/mock-tests', {
+      method: 'POST',
+      data: payload
+    });
+    return res.data;
+  },
+
+  async updateMockTest(testId, payload) {
+    const res = await apiClient.request(`/coordinator/mock-tests/${testId}`, {
+      method: 'PUT',
+      data: payload
+    });
+    return res.data;
+  },
+
+  async archiveMockTest(testId) {
+    const res = await apiClient.request(`/coordinator/mock-tests/${testId}`, {
+      method: 'DELETE'
+    });
+    return res.data;
+  },
+
+  async publishMockTest(testId) {
+    const res = await apiClient.request(`/coordinator/mock-tests/${testId}/publish`, {
+      method: 'PATCH'
+    });
+    return res.data;
+  },
+
+  async assignMockTest(testId, data) {
+    const res = await apiClient.request(`/coordinator/mock-tests/${testId}/assign`, {
+      method: 'PATCH',
+      data
+    });
+    return res.data;
+  },
+
+  // Student Directory & Performance
+  async getStudents(params = {}) {
+    const cleanParams = Object.fromEntries(
+      Object.entries(params).filter(([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'all' && v !== 'All' && v !== 'undefined' && v !== 'null')
+    );
+    const query = new URLSearchParams(cleanParams).toString();
+    const endpoint = query ? `/coordinator/students?${query}` : '/coordinator/students';
+    const res = await apiClient.request(endpoint, { method: 'GET' });
+    return res;
+  },
+
+  async getStudentDetail(studentId) {
+    const res = await apiClient.request(`/coordinator/students/${studentId}`, { method: 'GET' });
+    return res.data;
+  },
+
+  // Performance Insights & Reports
+  async getAnalytics() {
+    const res = await apiClient.request('/coordinator/analytics', { method: 'GET' });
+    return res.data;
+  },
+
+  async exportResultsCsv(params = {}) {
+    const cleanParams = Object.fromEntries(
+      Object.entries(params).filter(([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'all' && v !== 'All' && v !== 'undefined' && v !== 'null')
+    );
+    const query = new URLSearchParams(cleanParams).toString();
+    const endpoint = query ? `/coordinator/reports/export?${query}` : '/coordinator/reports/export';
+    const token = apiClient.getToken();
+    const url = `${apiClient.API_BASE_URL || 'http://localhost:5000/api/v1'}${endpoint}`;
+
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error('Failed to export CSV report');
+    }
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = `readyup_coordinator_report_${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
   }
 };

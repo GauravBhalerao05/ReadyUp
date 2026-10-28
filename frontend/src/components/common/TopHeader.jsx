@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import {
   Menu,
   Moon,
@@ -26,11 +26,59 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const notificationRef = useRef(null);
 
-  // Generate breadcrumb text from pathname
+  // Close notifications on tab/route changes
+  useEffect(() => {
+    setShowNotifications(false);
+  }, [location.pathname, location.search]);
+
+  // Close notifications on outside click or Escape key
+  useEffect(() => {
+    if (!showNotifications) return;
+
+    const handleClickOutside = (event) => {
+      if (notificationRef.current && !notificationRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setShowNotifications(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showNotifications]);
+
+  const getRoleLandingPath = () => {
+    if (!isAuthenticated) return '/';
+    const effectiveRole = user?.role || role;
+    if (effectiveRole === 'coordinator') return '/coordinator/dashboard';
+    if (effectiveRole === 'admin') return '/admin/dashboard';
+    return '/dashboard';
+  };
+
+  // Generate page title from pathname
   const getBreadcrumb = () => {
     const path = location.pathname;
-    if (path.includes('/dashboard')) return 'Overview';
+    if (path.includes('/coordinator/dashboard') || path.includes('/admin/dashboard') || path === '/dashboard') return 'Overview';
+    if (path.includes('/coordinator/reports')) return 'Reports';
+    if (path.includes('/coordinator/analytics')) return 'Analytics';
+    if (path.includes('/coordinator/students')) return 'Students';
+    if (path.includes('/coordinator/mock-tests')) return 'Mock Tests';
+    if (path.includes('/coordinator/import')) return 'Spreadsheet Import';
+    if (path.includes('/coordinator/questions')) return 'Question Bank';
+    if (path.includes('/coordinator/history')) return 'Import History';
+    if (path.includes('/admin/users')) return 'User Management';
+    if (path.includes('/admin/audit-logs')) return 'Audit Logs';
     if (path.includes('/practice')) return 'Topic Practice';
     if (path.includes('/companies')) return 'Company Directory';
     if (path.includes('/tests/take')) return 'Assessment Session';
@@ -38,11 +86,7 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
     if (path.includes('/tests')) return 'Mock Tests';
     if (path.includes('/revision')) return 'Revision Centre';
     if (path.includes('/profile')) return 'Profile & Settings';
-    if (path.includes('/coordinator/import')) return 'Spreadsheet Import';
-    if (path.includes('/coordinator/questions')) return 'Question Bank';
-    if (path.includes('/coordinator/history')) return 'Import History';
-    if (path.includes('/admin/users')) return 'User Management';
-    if (path.includes('/admin/audit-logs')) return 'Audit Logs';
+    if (path.includes('/dashboard')) return 'Overview';
     return 'Overview';
   };
 
@@ -119,10 +163,6 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
           </button>
 
           <div>
-            <span className="text-xs text-slate-400 dark:text-slate-500 font-medium hidden sm:inline">
-              ReadyUp
-            </span>
-            <span className="text-xs text-slate-300 dark:text-slate-600 mx-2 hidden sm:inline">/</span>
             <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white inline-block">
               {getBreadcrumb()}
             </h1>
@@ -134,7 +174,7 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
           {/* Dark / Light Toggle */}
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-full text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-2 rounded-full text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200 hover:rotate-12 active:scale-95 cursor-pointer"
             title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label="Toggle theme"
           >
@@ -154,7 +194,7 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
           </button>
 
           {/* Real-time Notification Bell */}
-          <div className="relative">
+          <div className="relative" ref={notificationRef}>
             <button
               onClick={() => setShowNotifications((prev) => !prev)}
               className="p-2 rounded-full text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative cursor-pointer"
@@ -229,11 +269,11 @@ export default function TopHeader({ onMenuClick, onSearchClick }) {
             className="flex items-center gap-2.5 pl-1.5 cursor-pointer group"
           >
             <div className="w-9 h-9 rounded-full bg-teal-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-teal-100 dark:ring-teal-900 group-hover:ring-teal-400 transition-all">
-              {user?.name ? user.name.slice(0, 2).toUpperCase() : 'AS'}
+              {user?.name ? user.name.slice(0, 2).toUpperCase() : 'RU'}
             </div>
             <div className="hidden sm:block text-left">
               <p className="text-xs font-bold text-slate-900 dark:text-white leading-tight group-hover:text-teal-600 transition-colors">
-                {user?.name || 'Aarav Sharma'}
+                {user?.name || 'User'}
               </p>
               <p className="text-[11px] text-slate-400 dark:text-slate-500 capitalize leading-tight">
                 {role === 'coordinator' ? 'Coordinator' : role === 'admin' ? 'Admin' : 'Student'}

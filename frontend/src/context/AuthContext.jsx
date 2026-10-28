@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { apiClient } from '../services/apiClient';
 import { initialAdminData } from '../services/mockData';
@@ -6,6 +7,8 @@ import { initialAdminData } from '../services/mockData';
 const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
+  const navigate = useNavigate();
+
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem('readyup_auth_user');
@@ -38,6 +41,11 @@ export function AuthProvider({ children }) {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const resetLoggingOut = useCallback(() => {
+    setIsLoggingOut(false);
+  }, []);
 
   useEffect(() => {
     if (user && token) {
@@ -48,10 +56,52 @@ export function AuthProvider({ children }) {
     }
   }, [user, token]);
 
-  const login = async (email, password) => {
+  // Synchronize authentication changes across multiple browser tabs
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === 'readyup_auth_user' || e.key === 'readyup_auth_token' || e.key === null) {
+        try {
+          const savedUser = localStorage.getItem('readyup_auth_user');
+          const savedToken = apiClient.getToken();
+          if (savedUser && savedToken) {
+            const parsed = JSON.parse(savedUser);
+            if (parsed && typeof parsed === 'object' && parsed.email) {
+              setUser(parsed);
+              setToken(savedToken);
+              return;
+            }
+          }
+        } catch {
+          // ignore parsing error
+        }
+        // Remote tab logged out or cleared credentials -> sync logout state
+        setIsLoggingOut(true);
+        setUser(null);
+        setToken(null);
+        apiClient.clearToken();
+        navigate('/', { replace: true });
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [navigate]);
+
+  useEffect(() => {
+    apiClient.setOnUnauthorized(() => {
+      setIsLoggingOut(true);
+      setUser(null);
+      setToken(null);
+      localStorage.removeItem('readyup_auth_user');
+      navigate('/', { replace: true });
+    });
+  }, [navigate]);
+
+
+  const login = async (email, password, requiredRole) => {
     setIsLoading(true);
     try {
-      const data = await authService.login(email, password);
+      const data = await authService.login(email, password, requiredRole);
       setUser(data.user);
       setToken(data.token);
       apiClient.setToken(data.token);
@@ -65,9 +115,6 @@ export function AuthProvider({ children }) {
     setIsLoading(true);
     try {
       const data = await authService.register(userData);
-      setUser(data.user);
-      setToken(data.token);
-      apiClient.setToken(data.token);
       return data;
     } finally {
       setIsLoading(false);
@@ -75,15 +122,18 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    setUser(null);
+    setToken(null);
+    apiClient.clearToken();
+    localStorage.removeItem('readyup_auth_user');
     try {
       await authService.logout();
     } catch {
       // offline logout
     } finally {
-      setUser(null);
-      setToken(null);
-      apiClient.clearToken();
-      localStorage.removeItem('readyup_auth_user');
+      navigate('/', { replace: true });
     }
   };
 
@@ -133,8 +183,10 @@ export function AuthProvider({ children }) {
         user,
         role: user?.role || 'student',
         token,
-        isAuthenticated: Boolean(user),
+        isAuthenticated: Boolean(user && token),
         isLoading,
+        isLoggingOut,
+        resetLoggingOut,
         login,
         register,
         logout,

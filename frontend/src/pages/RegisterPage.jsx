@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, Navigate } from 'react-router-dom';
 import { Award, ArrowRight, Lock, Mail, User, Building, GraduationCap, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -19,9 +19,21 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const { register } = useAuth();
+  const { register, role, isAuthenticated } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
+
+  const getRoleLandingPath = () => {
+    if (!isAuthenticated) return '/';
+    if (role === 'coordinator') return '/coordinator/dashboard';
+    if (role === 'admin') return '/admin/dashboard';
+    return '/dashboard';
+  };
+
+  // Synchronously redirect authenticated users away from registration page
+  if (isAuthenticated) {
+    return <Navigate to={getRoleLandingPath()} replace />;
+  }
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -47,13 +59,13 @@ export default function RegisterPage() {
 
     setIsLoading(true);
     try {
-      const res = await register(formData);
+      await register(formData);
       addToast({
         title: 'Account Created',
-        message: `Welcome to ReadyUp, ${res.user.name}!`,
+        message: 'Account created successfully. Please log in.',
         type: 'success'
       });
-      navigate('/dashboard');
+      navigate('/login?role=student', { replace: true });
     } catch (err) {
       setError(err.message || 'Registration failed');
     } finally {
@@ -64,7 +76,7 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F19] text-slate-900 dark:text-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
       <div className="sm:mx-auto sm:w-full sm:max-w-xl text-center">
-        <Link to="/" className="inline-flex items-center gap-2.5 mb-4 group">
+        <Link to={getRoleLandingPath()} className="inline-flex items-center gap-2.5 mb-4 group">
           <div className="w-10 h-10 rounded-2xl bg-teal-600 flex items-center justify-center text-white font-bold shadow-md shadow-teal-500/20 group-hover:scale-105 transition-transform">
             <Award className="w-6 h-6" />
           </div>

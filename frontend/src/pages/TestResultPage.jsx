@@ -7,6 +7,7 @@ import {
   HelpCircle,
   Bookmark,
   Sparkles,
+  ChevronLeft,
   X
 } from 'lucide-react';
 import { testService } from '../services/testService';
@@ -180,6 +181,18 @@ export default function TestResultPage() {
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-16 animate-in fade-in duration-300">
+      {/* Top Header Navigation */}
+      <div className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => navigate('/tests')}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-bold shadow-xs hover:border-teal-500/50 transition-all cursor-pointer"
+        >
+          <ChevronLeft className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+          <span>Back to Mock Tests</span>
+        </button>
+      </div>
+
       {/* Top Banner: Score & Pass/Fail */}
       <div className="bg-white dark:bg-slate-800/90 rounded-3xl p-6 sm:p-8 border border-slate-100 dark:border-slate-800 card-shadow">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -382,6 +395,26 @@ export default function TestResultPage() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Bottom Action Footer */}
+      <div className="p-6 rounded-3xl bg-white dark:bg-slate-800/90 border border-slate-100 dark:border-slate-800 card-shadow flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+            Assessment Review Complete
+          </h4>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Your results, detailed answers, and score have been saved to your student profile.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/tests')}
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs sm:text-sm shadow-md shadow-teal-600/20 transition-all cursor-pointer"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Mock Tests</span>
+        </button>
       </div>
 
       {/* Bookmark Modal */}

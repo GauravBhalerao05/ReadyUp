@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   BookmarkCheck,
   AlertCircle,
+  AlertTriangle,
   Trash2,
   RotateCcw,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  StickyNote
+  StickyNote,
+  X
 } from 'lucide-react';
 import { bookmarkService } from '../services/bookmarkService';
 import { testService } from '../services/testService';
@@ -21,6 +23,9 @@ export default function RevisionCentrePage() {
   const [incorrectQuestions, setIncorrectQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState({});
+  const [isStartingDrill, setIsStartingDrill] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -78,17 +83,78 @@ export default function RevisionCentrePage() {
     }
   };
 
+  // Derive unique eligible questions across bookmarks and incorrect questions
+  const getEligibleQuestionIds = () => {
+    const idSet = new Set();
+    const uniqueIds = [];
+
+    const addId = (id) => {
+      if (!id) return;
+      const str = String(id).trim();
+      const upper = str.toUpperCase();
+      if (!idSet.has(upper)) {
+        idSet.add(upper);
+        uniqueIds.push(str);
+      }
+    };
+
+    bookmarks.forEach((b) => {
+      addId(b.questionId || b.question?.questionId || b.question?._id || b._id);
+    });
+    incorrectQuestions.forEach((q) => {
+      addId(q.questionId || q._id);
+    });
+
+    return uniqueIds;
+  };
+
   const handleLaunchRetryDrill = async () => {
+    const eligibleIds = getEligibleQuestionIds();
+    if (eligibleIds.length === 0) {
+      addToast({
+        title: 'No Questions for Revision',
+        message: 'You currently have no bookmarked or previously incorrect questions to practice.',
+        type: 'info'
+      });
+      return;
+    }
+
+    setIsStartingDrill(true);
     try {
-      const session = await testService.startPractice({ count: 10 });
+      const session = await testService.startRevisionDrill(eligibleIds);
       addToast({
         title: 'Revision Drill Initialized',
-        message: 'Solving targeted revision questions',
+        message: `Practicing ${session.questions?.length || eligibleIds.length} targeted revision questions`,
         type: 'success'
       });
       navigate(`/practice/session/${session.attemptId}`, { state: { session } });
     } catch (err) {
-      addToast({ title: 'Error', message: err.message, type: 'error' });
+      addToast({ title: 'Error', message: err.message || 'Failed to initialize revision drill', type: 'error' });
+    } finally {
+      setIsStartingDrill(false);
+    }
+  };
+
+  const handleConfirmClearAll = async () => {
+    setIsClearing(true);
+    try {
+      await testService.clearAllRevisionItems();
+      setBookmarks([]);
+      setIncorrectQuestions([]);
+      setShowClearConfirm(false);
+      addToast({
+        title: 'Revision Centre Cleared',
+        message: 'All current revision items have been removed from your active revision list.',
+        type: 'success'
+      });
+    } catch (err) {
+      addToast({
+        title: 'Error Clearing Revision',
+        message: err.message || 'Failed to clear revision list. Please retry.',
+        type: 'error'
+      });
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -125,13 +191,26 @@ export default function RevisionCentrePage() {
           </p>
         </div>
 
-        <button
-          onClick={handleLaunchRetryDrill}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs sm:text-sm shadow-sm transition-all cursor-pointer self-start sm:self-auto"
-        >
-          <RotateCcw className="w-4 h-4" />
-          <span>Launch Revision Drill</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            disabled={bookmarks.length === 0 && incorrectQuestions.length === 0}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 font-semibold text-xs sm:text-sm hover:bg-rose-100 dark:hover:bg-rose-900/60 disabled:opacity-40 transition-all cursor-pointer disabled:cursor-not-allowed shadow-xs"
+            title="Clear all active revision items"
+          >
+            <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+            <span>Clear All</span>
+          </button>
+
+          <button
+            onClick={handleLaunchRetryDrill}
+            disabled={isStartingDrill || (bookmarks.length === 0 && incorrectQuestions.length === 0)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white font-semibold text-xs sm:text-sm shadow-sm transition-all cursor-pointer disabled:cursor-not-allowed"
+          >
+            <RotateCcw className={`w-4 h-4 ${isStartingDrill ? 'animate-spin' : ''}`} />
+            <span>{isStartingDrill ? 'Preparing Drill...' : 'Launch Revision Drill'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -318,6 +397,76 @@ export default function RevisionCentrePage() {
               </h4>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Confirmation Dialog: Clear All Revision Items */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-md w-full p-6 sm:p-7 border border-slate-100 dark:border-slate-700 shadow-2xl space-y-5 animate-in zoom-in-95">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Clear Revision Centre?
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    Active revision list reset
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                disabled={isClearing}
+                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              This will remove all current bookmarked questions and previously missed questions from your active revision list. Original question-bank records and historical test attempts will not be affected.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 text-amber-900 dark:text-amber-200 text-xs">
+              <p className="font-semibold">Note:</p>
+              <p className="mt-0.5">
+                Questions answered incorrectly in future tests or marked for review will automatically become eligible for revision again.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                disabled={isClearing}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearAll}
+                disabled={isClearing}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2"
+              >
+                {isClearing ? (
+                  <>
+                    <RotateCcw className="w-4 h-4 animate-spin" />
+                    <span>Clearing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Clear All</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
